@@ -58,11 +58,24 @@ def captcha_url(hass: HomeAssistant, flow_id: str) -> str:
         path = async_sign_path(hass, path, CAPTCHA_URL_TTL)
     except Exception:  # noqa: BLE001 - signing needs hass.http, keep the plain path
         _LOGGER.debug("Unable to sign the captcha URL, using a plain path", exc_info=True)
-    try:
-        base = get_url(hass, prefer_external=False) or ""
-    except Exception:  # noqa: BLE001 - NoURLAvailableError
-        base = ""
+    base = _base_url(hass)
     return f"{base}{path}" if base else path
+
+
+def _base_url(hass: HomeAssistant) -> str:
+    """Best absolute base URL of this instance (empty when none is configured)."""
+    for getter in (
+        lambda: get_url(hass, prefer_external=False),
+        lambda: hass.config.internal_url,
+        lambda: get_url(hass, prefer_external=True),
+    ):
+        try:
+            value = getter()
+        except Exception:  # noqa: BLE001 - NoURLAvailableError / NoExternalURL
+            continue
+        if value:
+            return str(value).rstrip("/")
+    return ""
 
 
 class CaptchaView(HomeAssistantView):

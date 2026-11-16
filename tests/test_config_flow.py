@@ -120,7 +120,8 @@ async def test_captcha_flow(hass, monkeypatch) -> None:
     placeholders = result["description_placeholders"]
     image_url = placeholders["image_url"]
     assert "/api/xiaomi_robot_map/captcha/" in image_url
-    assert "image_markdown" not in placeholders
+    # a stale browser-cached translation still asks for this key
+    assert placeholders["image_markdown"] == ""
     from custom_components.xiaomi_robot_map.http_views import _storage
 
     stored = _storage(hass)

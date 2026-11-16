@@ -19,7 +19,7 @@
       },
       "captcha": {
         "title": "Xiaomi verification",
-        "description": "Xiaomi asks to confirm that a human is signing in.\n\nOpen the captcha here: [captcha image]({image_url}) — the picture is enlarged for readability, the link works without signing in and lives for 30 minutes.\n\nType the characters from the picture below; the code is case-sensitive and spaces can be omitted. If the code is unreadable, leave the field empty and press Submit to get a new captcha.\n\n{detail}",
+        "description": "Xiaomi asks to confirm that a human is signing in.\n\n1. Open the captcha picture: [open the captcha image]({image_url})\n2. If the link does not open, copy this address into a browser tab: {image_url}\n3. Type the characters from the picture below (case-sensitive, spaces and dashes are not needed).\n\nThe link needs no Home Assistant login and lives for 30 minutes. If the code is unreadable, leave the field empty and press Submit to get a new captcha.\n\n{detail}",
         "data": {
           "captcha_code": "Code from the image"
         }

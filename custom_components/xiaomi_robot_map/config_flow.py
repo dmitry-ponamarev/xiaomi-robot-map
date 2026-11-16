@@ -374,7 +374,13 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
-            description_placeholders={"image_url": image_url, "detail": detail},
+            description_placeholders={
+                "image_url": image_url,
+                "detail": detail,
+                # a stale translation (cached by the browser) still references this
+                # key; an empty value keeps the form from failing with MISSING_VALUE
+                "image_markdown": "",
+            },
         )
 
     # -- two factor ------------------------------------------------------
