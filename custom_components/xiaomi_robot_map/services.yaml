@@ -1,0 +1,24 @@
+get_map:
+  target:
+    entity:
+      integration: xiaomi_robot_map
+      domain: camera
+  fields:
+    config_entry_id:
+      required: false
+      example: 01J8Z6Q3K9W4T5Y7X2V0M1N3B4
+      selector:
+        config_entry:
+          integration: xiaomi_robot_map
+refresh:
+  target:
+    entity:
+      integration: xiaomi_robot_map
+      domain: camera
+  fields:
+    config_entry_id:
+      required: false
+      example: 01J8Z6Q3K9W4T5Y7X2V0M1N3B4
+      selector:
+        config_entry:
+          integration: xiaomi_robot_map

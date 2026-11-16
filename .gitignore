@@ -1,0 +1,13 @@
+# Virtualenv / tooling
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Home Assistant runtime data
+config/
+
+# OS noise
+.DS_Store

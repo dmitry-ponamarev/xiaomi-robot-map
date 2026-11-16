@@ -1,0 +1,6 @@
+pytest-homeassistant-custom-component>=0.13
+pycryptodome>=3.20
+# python-miio is used only as a protocol oracle in the interop test
+python-miio>=0.5.12
+PyTurboJPEG==1.8.0
+ruff>=0.6

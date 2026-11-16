@@ -1,0 +1,104 @@
+{
+  "title": "Xiaomi Robot Vacuum Map",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Xiaomi account",
+        "description": "Sign in with the Mi Home account that owns the vacuum. The credentials are only used to download the map from the Xiaomi cloud.",
+        "data": {
+          "username": "Mi Home account (e-mail / phone)",
+          "password": "Password",
+          "country": "Cloud region"
+        }
+      },
+      "device": {
+        "title": "Choose the vacuum",
+        "description": "Pick the robot and enter its local IP address. The address is only used to ask the robot for the current map name.",
+        "data": {
+          "device_id": "Robot",
+          "host": "Local IP address"
+        }
+      },
+      "manual": {
+        "title": "Manual setup",
+        "description": "Enter the local IP address and the 32 character device token. The token is looked up in the cloud account to verify it.",
+        "data": {
+          "host": "Local IP address",
+          "token": "Device token",
+          "name": "Name (optional)"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Re-authenticate",
+        "description": "The Xiaomi cloud rejected the stored credentials. Enter the current password.",
+        "data": {
+          "username": "Mi Home account (e-mail / phone)",
+          "password": "Password",
+          "country": "Cloud region"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Xiaomi rejected the account credentials.",
+      "two_factor": "Xiaomi requires an additional confirmation. Open the link from the Home Assistant log on the device that owns the account, then retry.",
+      "cannot_connect": "Unable to reach the Xiaomi cloud.",
+      "no_devices": "No Roborock/Xiaomi vacuum was found in this account.",
+      "device_not_found": "The vacuum was not found in the account.",
+      "invalid_token": "The token must contain exactly 32 hexadecimal characters.",
+      "invalid_host": "Enter the local IP address of the vacuum."
+    },
+    "abort": {
+      "already_configured": "This vacuum is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "reauth_failed": "Re-authentication failed."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Map settings",
+        "description": "Polling, rendering and troubleshooting options.",
+        "data": {
+          "scan_interval": "Update interval (seconds)",
+          "idle_interval": "Update interval while idle (seconds)",
+          "theme": "Map theme",
+          "layers": "Layers to draw",
+          "rotate": "Rotation (degrees)",
+          "scale": "Scale",
+          "trim": "Crop in percent: left, top, right, bottom",
+          "map_name": "Map name override (leave empty for auto)",
+          "room_names": "Room names, e.g. 1: Kitchen, 2: Living room",
+          "store_raw_map": "Store the raw map on disk for diagnostics"
+        }
+      }
+    }
+  },
+  "entity": {
+    "camera": {
+      "map": {
+        "name": "Map"
+      }
+    },
+    "sensor": {
+      "position": {
+        "name": "Position"
+      },
+      "current_room": {
+        "name": "Current room"
+      },
+      "map_updated": {
+        "name": "Map updated"
+      }
+    }
+  },
+  "services": {
+    "get_map": {
+      "name": "Get map",
+      "description": "Returns the last rendered map as a base64 PNG together with the parsed map attributes."
+    },
+    "refresh": {
+      "name": "Refresh map",
+      "description": "Downloads the map immediately, ignoring the idle back-off."
+    }
+  }
+}
