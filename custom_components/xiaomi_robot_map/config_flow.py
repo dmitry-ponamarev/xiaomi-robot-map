@@ -81,6 +81,7 @@ from .const import (
     MAX_SCAN_INTERVAL,
     MIN_IDLE_INTERVAL,
     MIN_SCAN_INTERVAL,
+    SCALE_CHOICES,
     SOURCE_CLOUD,
     SOURCE_LOCAL,
     THEMES,
@@ -811,8 +812,13 @@ class XiaomiRobotMapOptionsFlow(OptionsFlow):
                 vol.Optional(CONF_ROTATE, default=str(current.get(CONF_ROTATE, DEFAULT_ROTATE))): SelectSelector(
                     SelectSelectorConfig(options=["0", "90", "180", "270"], mode=SelectSelectorMode.DROPDOWN)
                 ),
-                vol.Optional(CONF_SCALE, default=str(current.get(CONF_SCALE, DEFAULT_SCALE))): SelectSelector(
-                    SelectSelectorConfig(options=["1.0", "1.5", "2.0", "3.0"], mode=SelectSelectorMode.DROPDOWN)
+                vol.Optional(
+                    CONF_SCALE, default=_scale_choice(current.get(CONF_SCALE, DEFAULT_SCALE))
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[{"value": value, "label": f"{int(float(value))}×"} for value in SCALE_CHOICES],
+                        mode=SelectSelectorMode.DROPDOWN,
+                    )
                 ),
                 vol.Optional(CONF_TRIM, default=_trim_to_str(current.get(CONF_TRIM))): TextSelector(
                     TextSelectorConfig(type=TextSelectorType.TEXT)
@@ -829,6 +835,15 @@ class XiaomiRobotMapOptionsFlow(OptionsFlow):
             }
         )
         return schema
+
+
+def _scale_choice(value: object) -> str:
+    """Return a resolution multiplier that the select offers."""
+    try:
+        candidate = f"{float(value):.1f}"
+    except (TypeError, ValueError):
+        return SCALE_CHOICES[0]
+    return candidate if candidate in SCALE_CHOICES else SCALE_CHOICES[0]
 
 
 def _looks_like_map_object(value: str) -> bool:

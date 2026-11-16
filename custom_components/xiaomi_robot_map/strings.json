@@ -100,13 +100,14 @@
           "theme": "Map theme",
           "layers": "Layers to draw",
           "rotate": "Rotation (degrees)",
-          "scale": "Scale",
+          "scale": "Map resolution",
           "trim": "Crop in percent: left, top, right, bottom",
           "map_name": "Map name override (leave empty for auto)",
           "room_names": "Room names, e.g. 1: Kitchen, 2: Living room",
           "store_raw_map": "Store the raw map on disk for diagnostics"
         },
         "data_description": {
+          "scale": "1× is the native bitmap of the map (~50 mm per pixel). 4× gives about 20 pixels per metre — good for a full-screen camera card.",
           "map_name": "Troubleshooting only. Leave empty: the integration asks the robot for the name it uploaded. Do not put a camera or sensor entity id here."
         },
         "error": {

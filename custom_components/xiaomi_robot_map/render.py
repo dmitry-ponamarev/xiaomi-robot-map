@@ -40,6 +40,9 @@ from .rr_map import (
 
 _LOGGER = logging.getLogger(__name__)
 
+LABEL_FONT_SIZE = 11
+LABEL_MARGIN = 4
+
 Color = tuple[int, ...]
 
 CALIBRATION_CENTER = 25500
@@ -329,7 +332,8 @@ class _Canvas:
         self.transform = transform
 
     def point(self, x: float, y: float) -> tuple[float, float]:
-        return self.transform._source(x, y)  # noqa: SLF001
+        """Map coordinates -> pixels of the finished (cropped/scaled/rotated) image."""
+        return self.transform.to_pixel(x, y)
 
     def layer(self, draw: Callable[[ImageDraw.ImageDraw], None]) -> None:
         overlay = Image.new("RGBA", self.image.size, (0, 0, 0, 0))
@@ -383,10 +387,10 @@ def _draw_path(canvas: _Canvas, chunks: Iterable[Sequence[Point]], width: int, c
     canvas.layer(draw)
 
 
-def _draw_walls(canvas: _Canvas, walls: Iterable, color: Color) -> None:
+def _draw_walls(canvas: _Canvas, walls: Iterable, color: Color, width: int = 2) -> None:
     def draw(d: ImageDraw.ImageDraw) -> None:
         for wall in walls:
-            d.line([canvas.point(wall.x0, wall.y0), canvas.point(wall.x1, wall.y1)], fill=color, width=2)
+            d.line([canvas.point(wall.x0, wall.y0), canvas.point(wall.x1, wall.y1)], fill=color, width=width)
 
     canvas.layer(draw)
 
@@ -415,36 +419,63 @@ def _draw_zones(canvas: _Canvas, zones: Iterable, fill: Color, outline: Color) -
     canvas.layer(draw)
 
 
-def _draw_obstacles(canvas: _Canvas, obstacles: Iterable, theme: dict[str, object]) -> None:
+def _draw_obstacles(
+    canvas: _Canvas, obstacles: Iterable, theme: dict[str, object], scale: float = 1.0
+) -> None:
     color = theme["wall_line"]
+    stroke = max(1, round(2 * scale))
 
     def draw(d: ImageDraw.ImageDraw) -> None:
         for obstacle in obstacles:
             px, py = canvas.point(obstacle.x, obstacle.y)
-            radius = 3
-            d.line([(px - radius, py - radius), (px + radius, py + radius)], fill=color, width=2)
-            d.line([(px - radius, py + radius), (px + radius, py - radius)], fill=color, width=2)
+            radius = 3 * scale
+            d.line([(px - radius, py - radius), (px + radius, py + radius)], fill=color, width=stroke)
+            d.line([(px - radius, py + radius), (px + radius, py - radius)], fill=color, width=stroke)
 
     canvas.layer(draw)
 
 
-def _draw_room_numbers(canvas: _Canvas, map_data: RRMap, theme: dict[str, object]) -> None:
-    font = ImageFont.load_default()
+def _label_font(scale: float) -> ImageFont.ImageFont:
+    """Pillow default font, sized for the rendered scale."""
+    size = max(10, int(round(LABEL_FONT_SIZE * (scale if scale and scale > 0 else 1.0))))
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:  # Pillow < 10.1 has no sized default font
+        return ImageFont.load_default()
 
-    def draw(d: ImageDraw.ImageDraw) -> None:
-        for number, room in map_data.rooms.items():
-            px, py = canvas.point((room.x0 + room.x1) / 2, (room.y0 + room.y1) / 2)
-            d.text(
-                (px, py),
-                str(number),
-                fill=theme["room_label"],
-                font=font,
-                anchor="mm",
-                stroke_width=2,
-                stroke_fill=theme["background"],
-            )
 
-    canvas.layer(draw)
+def _draw_room_numbers(
+    image: Image.Image,
+    map_data: RRMap,
+    theme: dict[str, object],
+    transform: ImageTransform | None,
+) -> Image.Image:
+    """Draw room numbers upright, whatever the map rotation/scale is.
+
+    The numbers are painted on the finished image, so rotating the map never
+    rotates the text: only the room centres are transformed.
+    """
+    if transform is None or not map_data.rooms:
+        return image
+    font = _label_font(transform.scale)
+    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay, "RGBA")
+    for number, room in map_data.rooms.items():
+        px, py = transform.to_pixel((room.x0 + room.x1) / 2, (room.y0 + room.y1) / 2)
+        if not (-LABEL_MARGIN <= px <= image.width + LABEL_MARGIN) or not (
+            -LABEL_MARGIN <= py <= image.height + LABEL_MARGIN
+        ):
+            continue
+        draw.text(
+            (px, py),
+            str(number),
+            fill=theme["room_label"],
+            font=font,
+            anchor="mm",
+            stroke_width=2,
+            stroke_fill=theme["background"],
+        )
+    return Image.alpha_composite(image, overlay)
 
 
 def _finalize(image: Image.Image, map_image: MapImage, options: RenderOptions) -> tuple[Image.Image, ImageTransform]:
@@ -505,22 +536,15 @@ def render_map(map_data: RRMap, options: RenderOptions | None = None) -> Rendere
     image = _apply_removed(image, map_image, map_data.removed, theme)
     image = _draw_carpet(image, map_image, theme, map_data.carpets)
 
-    transform = ImageTransform(
-        width=map_image.width,
-        height=map_image.height,
-        source_width=map_image.width,
-        source_height=map_image.height,
-        left=map_image.left,
-        top=map_image.top,
-        trim_left=0,
-        trim_top=0,
-        trim_right=0,
-        trim_bottom=0,
-        scale=1.0,
-        rotation=0,
-    )
+    # Crop / scale / rotate the raster first, then draw every vector layer on the
+    # finished image: raising the resolution upscales only the pixel grid, while
+    # paths, walls, the robot and the labels keep their own crisp geometry.
+    image, transform = _finalize(image, map_image, options)
     canvas = _Canvas(image, transform)
     layers = options.layers
+    scale = transform.scale
+    path_width = max(1, round(options.path_width * scale))
+    stroke = max(1, round(2 * scale))
 
     if LAYER_NO_CARPET_AREAS in layers and map_data.no_carpet_areas:
         _draw_areas(canvas, map_data.no_carpet_areas, theme["no_carpet_fill"], theme["no_carpet_outline"])  # type: ignore[arg-type]
@@ -531,29 +555,30 @@ def render_map(map_data: RRMap, options: RenderOptions | None = None) -> Rendere
     if LAYER_ZONES in layers and map_data.zones:
         _draw_zones(canvas, map_data.zones, theme["zones_fill"], theme["zones_outline"])  # type: ignore[arg-type]
     if LAYER_VIRTUAL_WALLS in layers and map_data.walls:
-        _draw_walls(canvas, map_data.walls, theme["wall_line"])  # type: ignore[arg-type]
+        _draw_walls(canvas, map_data.walls, theme["wall_line"], width=stroke)  # type: ignore[arg-type]
     if LAYER_PREDICTED_PATH in layers and map_data.predicted_path:
-        _draw_path(canvas, map_data.predicted_path.chunks, options.path_width, theme["predicted_path"])  # type: ignore[arg-type]
+        _draw_path(canvas, map_data.predicted_path.chunks, path_width, theme["predicted_path"])  # type: ignore[arg-type]
     if LAYER_GOTO_PATH in layers and map_data.goto_path:
-        _draw_path(canvas, map_data.goto_path.chunks, options.path_width, theme["goto_path"])  # type: ignore[arg-type]
+        _draw_path(canvas, map_data.goto_path.chunks, path_width, theme["goto_path"])  # type: ignore[arg-type]
     if LAYER_PATH in layers and map_data.path:
-        _draw_path(canvas, map_data.path.chunks, options.path_width, theme["path"])  # type: ignore[arg-type]
+        _draw_path(canvas, map_data.path.chunks, path_width, theme["path"])  # type: ignore[arg-type]
     if map_data.mop_path and LAYER_PATH in layers:
-        _draw_path(canvas, map_data.mop_path.chunks, options.path_width, theme["mop_path"])  # type: ignore[arg-type]
+        _draw_path(canvas, map_data.mop_path.chunks, path_width, theme["mop_path"])  # type: ignore[arg-type]
     if LAYER_OBSTACLES in layers and map_data.obstacles:
-        _draw_obstacles(canvas, map_data.obstacles, theme)
+        _draw_obstacles(canvas, map_data.obstacles, theme, scale)
     if LAYER_CHARGER in layers and map_data.charger:
-        _draw_charger(canvas, map_data.charger, options.charger_radius, theme)
-    if LAYER_ROOM_NUMBERS in layers and map_data.rooms:
-        _draw_room_numbers(canvas, map_data, theme)
+        _draw_charger(canvas, map_data.charger, options.charger_radius * scale, theme)
     if LAYER_ROBOT in layers and map_data.vacuum_position:
-        _draw_robot(canvas, map_data.vacuum_position, options.robot_radius, theme)
+        _draw_robot(canvas, map_data.vacuum_position, options.robot_radius * scale, theme)
 
-    final, final_transform = _finalize(canvas.image, map_image, options)
+    final = canvas.image
+    if LAYER_ROOM_NUMBERS in layers and map_data.rooms:
+        final = _draw_room_numbers(final, map_data, theme, transform)
+
     return RenderedMap(
         image=final,
-        transform=final_transform,
-        scale=options.scale,
+        transform=transform,
+        scale=scale,
         rotation=options.rotate,
         is_empty=False,
     )

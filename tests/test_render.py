@@ -7,7 +7,9 @@ from PIL import Image
 
 from custom_components.xiaomi_robot_map.render import (
     THEMES,
+    ImageTransform,
     RenderOptions,
+    _draw_room_numbers,
     render_map,
     render_placeholder,
 )
@@ -125,6 +127,71 @@ def test_robot_layer_is_drawn(map_data) -> None:
         for dy in range(-3, 4)
     }
     assert any(color == pytest.approx(robot_pixel[:3], abs=6) for color in colors)
+
+
+def _label_patch_bbox(map_data, rotation: int) -> tuple[int, int]:
+    """Bounding box (w, h) of the room-1 glyph drawn on a blank canvas."""
+    transform = ImageTransform(
+        width=HEIGHT * 2 if rotation != 90 else WIDTH * 2,
+        height=WIDTH * 2 if rotation != 90 else HEIGHT * 2,
+        source_width=WIDTH,
+        source_height=HEIGHT,
+        left=LEFT,
+        top=TOP,
+        trim_left=0,
+        trim_top=0,
+        trim_right=0,
+        trim_bottom=0,
+        scale=2.0,
+        rotation=rotation,
+    )
+    canvas = Image.new("RGBA", (transform.width, transform.height), (255, 255, 255, 255))
+    painted = _draw_room_numbers(canvas, map_data, THEMES["dark"], transform)
+
+    # Only look at room 1: a crop around its transformed centre, so the other
+    # rooms' numbers cannot stretch the bounding box.
+    room = map_data.rooms[1]
+    px, py = transform.to_pixel((room.x0 + room.x1) / 2, (room.y0 + room.y1) / 2)
+    patch = painted.crop((int(px) - 20, int(py) - 20, int(px) + 21, int(py) + 21))
+    mask = patch.convert("RGB").point(lambda value: 0 if value > 250 else 255).convert("1")
+    box = mask.getbbox()
+    assert box is not None, "no room number was drawn"
+    return box[2] - box[0], box[3] - box[1]
+
+
+@pytest.mark.parametrize("rotation", [90, 180, 270])
+def test_room_numbers_stay_upright_when_rotated(map_data, rotation: int) -> None:
+    """Labels are painted on the finished image, so rotation must not tilt them."""
+    # A digit is taller than it is wide; a tilted one would come out wider.
+    width, height = _label_patch_bbox(map_data, rotation)
+    assert height > width, f"the label looks rotated at {rotation}°: {width}x{height}"
+
+
+def test_room_numbers_follow_the_rotation(map_data) -> None:
+    """The number sits at the transformed room centre, inside its room."""
+    label = THEMES["dark"]["room_label"]
+    for rotation in (0, 90, 180, 270):
+        rendered = render_map(
+            map_data, RenderOptions(layers=frozenset({"room_numbers"}), rotate=rotation, scale=2.0)
+        )
+        room = map_data.rooms[2]
+        x, y = rendered.to_pixel((room.x0 + room.x1) / 2, (room.y0 + room.y1) / 2)
+        hits = 0
+        for dx in range(-10, 11):
+            for dy in range(-10, 11):
+                px, py = int(x) + dx, int(y) + dy
+                if 0 <= px < rendered.image.width and 0 <= py < rendered.image.height:
+                    color = rendered.image.convert("RGB").getpixel((px, py))
+                    if color == pytest.approx(label[:3], abs=12):
+                        hits += 1
+        assert hits > 5, f"no room number under rotation {rotation}"
+
+
+@pytest.mark.parametrize("scale", [1.0, 2.0, 4.0, 6.0])
+def test_resolution_multiplier_scales_the_image(map_data, scale: float) -> None:
+    rendered = render_map(map_data, RenderOptions(layers=frozenset(), scale=scale))
+    assert rendered.image.size == (int(WIDTH * scale), int(HEIGHT * scale))
+    assert rendered.scale == scale
 
 
 def test_light_theme(map_data) -> None:

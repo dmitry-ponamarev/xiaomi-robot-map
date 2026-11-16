@@ -62,6 +62,9 @@ DEFAULT_SCAN_INTERVAL = 10
 DEFAULT_IDLE_INTERVAL = 300
 DEFAULT_THEME = "dark"
 DEFAULT_SCALE = 1.0
+# Resolution multipliers offered in the UI: 1x is the native map bitmap (~50 mm/px),
+# 4x gives roughly 20 px per metre for a full-screen camera card.
+SCALE_CHOICES = ("1.0", "2.0", "3.0", "4.0", "6.0")
 DEFAULT_ROTATE = 0
 DEFAULT_ROBOT_RADIUS = 7
 
