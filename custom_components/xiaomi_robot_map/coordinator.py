@@ -33,9 +33,10 @@ from .const import (
     DOMAIN,
     STORAGE_RAW_DIR,
 )
-from .provider import MapFetcher, MapPayload
+from .provider import MapFetcher, MapPayload, parse_local_payload
 from .render import RenderedMap, RenderOptions, render_map, render_placeholder
-from .rr_map import RRMap, RRMapError, parse_rrmap
+from .rr_map import RRMap, RRMapError
+from .valetudo_map import ValetudoMapError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -115,7 +116,7 @@ class MapCoordinator(DataUpdateCoordinator[MapSnapshot]):
         self,
         hass: HomeAssistant,
         entry: ConfigEntry,
-        client: XiaomiCloudClient,
+        client: XiaomiCloudClient | None,
         fetcher: MapFetcher,
     ) -> None:
         self.entry = entry
@@ -146,7 +147,7 @@ class MapCoordinator(DataUpdateCoordinator[MapSnapshot]):
             _LOGGER.debug("Skipping map update: the robot is idle, next poll in %s s", int(self._skip_until - now))
             return self.data
 
-        if not self.client.logged_in:
+        if self.client is not None and not self.client.logged_in:
             try:
                 await self.client.async_login()
             except XiaomiAuthError as err:
@@ -168,8 +169,8 @@ class MapCoordinator(DataUpdateCoordinator[MapSnapshot]):
 
     async def _async_build_snapshot(self, payload: MapPayload) -> MapSnapshot:
         try:
-            map_data = await self.hass.async_add_executor_job(parse_rrmap, payload.raw)
-        except RRMapError as err:
+            map_data = await self.hass.async_add_executor_job(parse_local_payload, payload)
+        except (RRMapError, ValetudoMapError) as err:
             self.last_error = str(err)
             raise UpdateFailed(f"unable to parse the map: {err}") from err
         except Exception as err:  # noqa: BLE001 - never kill the coordinator

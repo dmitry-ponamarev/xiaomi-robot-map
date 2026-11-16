@@ -8,6 +8,7 @@ import pytest
 from homeassistant.components.camera import async_get_image
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import entity_registry as er
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.xiaomi_robot_map.cloud import XiaomiApiError, XiaomiAuthError
 from custom_components.xiaomi_robot_map.const import DOMAIN, SERVICE_GET_MAP, SERVICE_REFRESH
@@ -143,3 +144,70 @@ async def test_unload_removes_services(hass, loaded_entry) -> None:
     await hass.async_block_till_done()
     assert not hass.services.has_service(DOMAIN, SERVICE_REFRESH)
     assert not hass.services.has_service(DOMAIN, SERVICE_GET_MAP)
+
+
+# -- local source (no cloud) ----------------------------------------------
+
+
+LOCAL_URL = "http://192.168.1.90/api/v2/robot/state/map"
+
+
+@pytest.fixture
+def local_entry() -> MockConfigEntry:
+    from custom_components.xiaomi_robot_map.const import (
+        CONF_LOCAL_KIND,
+        CONF_MODEL,
+        CONF_NAME,
+        CONF_PASSWORD,
+        CONF_SOURCE,
+        CONF_URL,
+        CONF_USERNAME,
+    )
+
+    return MockConfigEntry(
+        domain=DOMAIN,
+        title="Valetudo",
+        unique_id="local-test",
+        data={
+            CONF_SOURCE: "local",
+            CONF_LOCAL_KIND: "valetudo",
+            CONF_URL: LOCAL_URL,
+            CONF_USERNAME: "",
+            CONF_PASSWORD: "",
+            "bearer_token": "",
+            CONF_NAME: "Valetudo Robot",
+            CONF_MODEL: "Valetudo",
+        },
+    )
+
+
+async def test_local_entry_setup(hass, local_entry, aioclient_mock) -> None:
+    import json
+
+    from tests.fixtures.valetudo_builder import build_valetudo_map
+
+    aioclient_mock.get(LOCAL_URL, text=json.dumps(build_valetudo_map()))
+    local_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(local_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert local_entry.state is ConfigEntryState.LOADED
+    image = await async_get_image(hass, "camera.valetudo_robot_map")
+    assert image.content_type == "image/png"
+    assert image.content.startswith(PNG_MAGIC)
+
+    position = hass.states.get("sensor.valetudo_robot_position")
+    assert position is not None
+    assert position.state == "250, 300"
+    assert position.attributes["room"] == 1
+
+    state = hass.states.get("camera.valetudo_robot_map")
+    assert set(state.attributes["rooms"]) == {"1", "2"}
+
+
+async def test_local_entry_failure_retries(hass, local_entry, aioclient_mock) -> None:
+    aioclient_mock.get(LOCAL_URL, status=500)
+    local_entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(local_entry.entry_id)
+    await hass.async_block_till_done()
+    assert local_entry.state is ConfigEntryState.SETUP_RETRY

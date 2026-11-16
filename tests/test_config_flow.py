@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
+import json
+
 from custom_components.xiaomi_robot_map.cloud import CloudDevice, XiaomiAuthError, XiaomiCloudError
 from custom_components.xiaomi_robot_map.const import (
     CONF_COUNTRY,
     CONF_DEVICE_ID,
     CONF_HOST,
     CONF_LAYERS,
+    CONF_LOCAL_KIND,
     CONF_PASSWORD,
     CONF_SCALE,
     CONF_SCAN_INTERVAL,
+    CONF_SOURCE,
     CONF_TOKEN,
+    CONF_URL,
     CONF_USERNAME,
     DOMAIN,
 )
+from tests.fixtures.valetudo_builder import build_valetudo_map
 
 USER_INPUT = {
     CONF_USERNAME: "user@example.com",
@@ -22,20 +28,35 @@ USER_INPUT = {
     CONF_COUNTRY: "de",
 }
 
+VALETUDO_URL = "http://192.168.1.90/api/v2/robot/state/map"
+LOCAL_INPUT = {
+    CONF_LOCAL_KIND: "valetudo",
+    CONF_URL: VALETUDO_URL,
+    CONF_USERNAME: "",
+    CONF_PASSWORD: "",
+    "bearer_token": "",
+    "name": "Kitchen robot",
+}
 
-async def _start(hass):
-    return await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
 
-
-async def test_user_form(hass) -> None:
-    result = await _start(hass)
+async def _start(hass, source: str = "cloud"):
+    """Start the flow and pick the map source."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
     assert result["type"] == "form"
     assert result["step_id"] == "user"
-    assert result["errors"] == {}
+    return await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_SOURCE: source})
+
+
+async def test_source_form(hass) -> None:
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert result["type"] == "form"
+    assert result["step_id"] == "user"
 
 
 async def test_cloud_flow_creates_entry(hass) -> None:
-    result = await _start(hass)
+    result = await _start(hass, "cloud")
+    assert result["step_id"] == "cloud"
+
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     assert result["type"] == "form"
     assert result["step_id"] == "device"
@@ -50,6 +71,7 @@ async def test_cloud_flow_creates_entry(hass) -> None:
     assert entry.data[CONF_TOKEN] == "0123456789abcdef0123456789abcdef"
     assert entry.data[CONF_HOST] == "192.168.1.50"
     assert entry.data["model"] == "roborock.vacuum.s5"
+    assert entry.data[CONF_SOURCE] == "cloud"
 
 
 async def test_invalid_auth(hass, monkeypatch) -> None:
@@ -57,7 +79,7 @@ async def test_invalid_auth(hass, monkeypatch) -> None:
         raise XiaomiAuthError("bad credentials")
 
     monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
-    result = await _start(hass)
+    result = await _start(hass, "cloud")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     assert result["type"] == "form"
     assert result["errors"] == {"base": "invalid_auth"}
@@ -68,7 +90,7 @@ async def test_cloud_unreachable(hass, monkeypatch) -> None:
         raise XiaomiCloudError("timeout")
 
     monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
-    result = await _start(hass)
+    result = await _start(hass, "cloud")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     assert result["errors"] == {"base": "cannot_connect"}
 
@@ -78,7 +100,7 @@ async def test_no_devices(hass, monkeypatch) -> None:
         return []
 
     monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_get_devices", _devices)
-    result = await _start(hass)
+    result = await _start(hass, "cloud")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     assert result["type"] == "form"
     # The flow still offers the manual (host/token) fallback.
@@ -86,7 +108,7 @@ async def test_no_devices(hass, monkeypatch) -> None:
 
 
 async def test_manual_flow(hass) -> None:
-    result = await _start(hass)
+    result = await _start(hass, "cloud")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
 
     result = await hass.config_entries.flow.async_configure(
@@ -104,7 +126,7 @@ async def test_manual_flow(hass) -> None:
 
 
 async def test_manual_flow_validates_token(hass) -> None:
-    result = await _start(hass)
+    result = await _start(hass, "cloud")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_DEVICE_ID: "__manual__", CONF_HOST: "192.168.1.50"}
@@ -121,7 +143,7 @@ async def test_manual_flow_unknown_device(hass, monkeypatch) -> None:
         return [CloudDevice(device_id="other", name="Other", model="roborock.vacuum.s5", token="f" * 32, country="de")]
 
     monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_get_devices", _devices)
-    result = await _start(hass)
+    result = await _start(hass, "cloud")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_DEVICE_ID: "__manual__", CONF_HOST: "192.168.1.50"}
@@ -135,20 +157,78 @@ async def test_manual_flow_unknown_device(hass, monkeypatch) -> None:
 
 
 async def test_duplicate_entry_aborts(hass) -> None:
-    result = await _start(hass)
+    result = await _start(hass, "cloud")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_DEVICE_ID: "3123456789", CONF_HOST: "192.168.1.50"}
     )
     assert result["type"] == "create_entry"
 
-    result = await _start(hass)
+    result = await _start(hass, "cloud")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_DEVICE_ID: "3123456789", CONF_HOST: "192.168.1.60"}
     )
     assert result["type"] == "abort"
     assert result["reason"] == "already_configured"
+
+
+# -- local source (no cloud) ----------------------------------------------
+
+
+async def test_local_flow_creates_entry(hass, aioclient_mock) -> None:
+    aioclient_mock.get(VALETUDO_URL, text=json.dumps(build_valetudo_map()))
+
+    result = await _start(hass, "local")
+    assert result["type"] == "form"
+    assert result["step_id"] == "local"
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], LOCAL_INPUT)
+    assert result["type"] == "create_entry"
+    entry = result["result"]
+    assert entry.title == "Kitchen robot"
+    assert entry.data[CONF_SOURCE] == "local"
+    assert entry.data[CONF_URL] == VALETUDO_URL
+    assert entry.data[CONF_LOCAL_KIND] == "valetudo"
+
+
+async def test_local_flow_rejects_bad_url(hass) -> None:
+    result = await _start(hass, "local")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**LOCAL_INPUT, CONF_URL: "192.168.1.90/api"}
+    )
+    assert result["type"] == "form"
+    assert result["errors"] == {CONF_URL: "invalid_url"}
+
+
+async def test_local_flow_unreachable(hass, aioclient_mock) -> None:
+    aioclient_mock.get(VALETUDO_URL, status=401)
+    result = await _start(hass, "local")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], LOCAL_INPUT)
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "cannot_connect"}
+
+
+async def test_local_flow_invalid_document(hass, aioclient_mock) -> None:
+    aioclient_mock.get(VALETUDO_URL, text="<html>not a map</html>")
+    result = await _start(hass, "local")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], LOCAL_INPUT)
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "invalid_format"}
+
+
+async def test_local_raw_rrmap(hass, aioclient_mock) -> None:
+    from tests.fixtures.rrmap_builder import build_map
+
+    url = "http://192.168.1.90/map.gz"
+    aioclient_mock.get(url, content=build_map())
+    result = await _start(hass, "local")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {**LOCAL_INPUT, CONF_LOCAL_KIND: "rrmap", CONF_URL: url},
+    )
+    assert result["type"] == "create_entry"
+    assert result["result"].data[CONF_LOCAL_KIND] == "rrmap"
 
 
 async def test_options_flow(hass, config_entry) -> None:

@@ -16,6 +16,9 @@
 - 🎨 Две темы (тёмная/светлая), масштаб, поворот, обрезка краёв, выбор слоёв.
 - ☁️ Логин в облако Xiaomi по аккаунту Mi Home, автоматическое определение модели,
   устройства и токена; ручной режим по IP + токену.
+- 🏠 **Локальный режим без облака**: карта берётся из Valetudo
+  (`/api/v2/robot/state/map`) или с любого HTTP-адреса, отдающего сырой RRMap —
+  аккаунт Xiaomi не нужен.
 - 🔐 Reauth-поток: при смене пароля HA сам предложит войти заново.
 - 📊 Диагностика: скачивание диагностики, сохранение исходного файла карты на диск,
   offline-рендер через `tools/render_map.py`.
@@ -50,6 +53,9 @@ Home Assistant 2025.1 или новее, Python 3.13 (в HA OS/Supervised уже
 5. Файл распаковывается, разбирается (RRMap: заголовок + типизированные блоки) и
    рендерится в PNG через Pillow.
 
+В локальном режиме шаги 1-4 не нужны: интеграция запрашивает карту по HTTP
+напрямую у робота или локального сервиса и разбирает её тем же рендерером.
+
 ## Установка
 
 ### HACS (рекомендуется)
@@ -71,6 +77,8 @@ Home Assistant 2025.1 или новее, Python 3.13 (в HA OS/Supervised уже
 
 **Настройки → Устройства и службы → Добавить интеграцию → Xiaomi Robot Vacuum Map.**
 
+0. **Источник карты** — «Облако Xiaomi» (штатная прошивка) или «Локально, без облака»
+   (см. раздел ниже).
 1. **Аккаунт Xiaomi** — e-mail/телефон и пароль от Mi Home, регион облака
    (обычно `de` для Европы, `cn` для Китая, `ru` для России).
    Если Xiaomi просит подтверждение (2FA), откройте ссылку из журнала HA на телефоне,
@@ -79,6 +87,27 @@ Home Assistant 2025.1 или новее, Python 3.13 (в HA OS/Supervised уже
    (например, `192.168.1.50`); закрепите его в DHCP, чтобы адрес не менялся.
 3. Если устройства нет в списке — выберите «Enter host and token manually» и введите
    IP и 32-символьный токен. Токен проверяется по аккаунту в облаке.
+
+## Локальный режим (без облака)
+
+Штатный робот Roborock **не отдаёт карту по локальному протоколу**: по токену доступны
+команды и имя карты, а сам файл карты лежит только в облаке Xiaomi. Поэтому «только
+токен» без облака для штатной прошивки невозможен — но есть два реальных локальных пути,
+и оба поддерживаются:
+
+**1. Valetudo** (прошитый робот). Укажите адрес вида
+`http://192.168.1.50/api/v2/robot/state/map`, формат — «Valetudo». Если в Valetudo
+включён Basic Auth, заполните логин и пароль.
+
+**2. Любой локальный источник сырой карты RRMap** — HTTP-адрес, отдающий `.gz`/`.bin`
+файл карты (например, `local_roborock_server`, Valetudo-RE/DustBuilder, ваш скрипт):
+формат «Raw RRMap file over HTTP». Если сервис требует авторизацию — Basic (логин/пароль)
+или Bearer-токен.
+
+Что происходит при добавлении: интеграция сразу скачивает карту по указанному адресу и
+разбирает её, поэтому ошибки видно в момент настройки (`cannot_connect`, `invalid_format`).
+Аккаунт Mi Home не запрашивается, в `.storage` попадают только адрес и, если указаны,
+локальные логин/пароль.
 
 ## Сущности
 
@@ -182,7 +211,9 @@ python tools/render_map.py /config/xiaomi_robot_map/<entry_id>.bin map.png \
 
 ## Известные ограничения
 
-- Нужен доступ в интернет: карта хранится в облаке Xiaomi, локально её взять нельзя.
+- Штатная прошивка: нужен доступ в интернет, карта хранится в облаке Xiaomi и локально
+  её взять нельзя. Полностью локально работает только режим Valetudo / локального
+  RRMap-источника.
 - Имя карты забирается по локальному протоколу miio, поэтому IP робота обязателен.
 - Пароль аккаунта хранится в `.storage` Home Assistant — как и у других облачных
   интеграций. Используйте отдельный аккаунт Mi Home с доступом к дому, если это важно.
@@ -224,8 +255,9 @@ ruff check .
 
 A HACS-compatible custom integration that renders the map of Roborock/Xiaomi
 vacuums (RRMap format) as a Home Assistant camera, with position/room sensors.
-Setup is done in the UI: sign in to the Mi Home cloud, pick the vacuum and enter
-its LAN IP. The integration logs in to the Xiaomi cloud, reads the current map
+Setup is done in the UI: either sign in to the Mi Home cloud, pick the vacuum and
+enter its LAN IP, or choose the local mode (no Xiaomi account) and point the
+integration at Valetudo's map endpoint or any HTTP source of a raw RRMap file. The integration logs in to the Xiaomi cloud, reads the current map
 name from the robot over the local miIO protocol (implemented in `miio_local.py`,
 no python-miio needed), downloads the gzip map blob, parses it and renders a PNG
 with Pillow. Options: theme, layers, scale, rotation, crop, polling intervals,

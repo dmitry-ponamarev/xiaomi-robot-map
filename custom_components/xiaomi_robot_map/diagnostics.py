@@ -47,5 +47,10 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
         }
     else:
         diagnostics["map"] = None
+    diagnostics["source"] = {
+        "kind": entry.data.get("source", "cloud"),
+        "local_kind": entry.data.get("local_kind"),
+        "url": entry.data.get("url"),
+    }
     diagnostics["integration"] = DOMAIN
     return diagnostics

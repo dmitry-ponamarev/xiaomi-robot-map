@@ -2,12 +2,31 @@
   "config": {
     "step": {
       "user": {
+        "title": "Map source",
+        "description": "Where should the map come from? The Xiaomi cloud works with stock firmware. Local mode needs no Xiaomi account: it reads the map from Valetudo or from a local HTTP endpoint that serves a raw RRMap file. Stock robots do not expose their map locally.",
+        "data": {
+          "source": "Source"
+        }
+      },
+      "cloud": {
         "title": "Xiaomi account",
         "description": "Sign in with the Mi Home account that owns the vacuum. The credentials are only used to download the map from the Xiaomi cloud.",
         "data": {
           "username": "Mi Home account (e-mail / phone)",
           "password": "Password",
           "country": "Cloud region"
+        }
+      },
+      "local": {
+        "title": "Local map source",
+        "description": "No Xiaomi account is used. Valetudo robots answer at http://<robot-ip>/api/v2/robot/state/map. Alternatively point to any HTTP endpoint that returns a raw RRMap .gz/.bin file. Fill in the login only if the endpoint requires it.",
+        "data": {
+          "local_kind": "Map format",
+          "url": "Map URL",
+          "username": "Login (optional)",
+          "password": "Password (optional)",
+          "bearer_token": "Bearer token (optional)",
+          "name": "Name (optional)"
         }
       },
       "device": {
@@ -44,7 +63,9 @@
       "no_devices": "No Roborock/Xiaomi vacuum was found in this account.",
       "device_not_found": "The vacuum was not found in the account.",
       "invalid_token": "The token must contain exactly 32 hexadecimal characters.",
-      "invalid_host": "Enter the local IP address of the vacuum."
+      "invalid_host": "Enter the local IP address of the vacuum.",
+      "invalid_url": "Enter a full URL starting with http:// or https://.",
+      "invalid_format": "The endpoint answered, but the payload is neither a Valetudo map nor a valid RRMap file."
     },
     "abort": {
       "already_configured": "This vacuum is already configured.",

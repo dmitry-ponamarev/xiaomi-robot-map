@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
@@ -27,11 +29,13 @@ from homeassistant.helpers.selector import (
 from .cloud import CloudDevice, XiaomiAuthError, XiaomiCloudClient, XiaomiCloudError
 from .const import (
     AVAILABLE_COUNTRIES,
+    CONF_BEARER_TOKEN,
     CONF_COUNTRY,
     CONF_DEVICE_ID,
     CONF_HOST,
     CONF_IDLE_INTERVAL,
     CONF_LAYERS,
+    CONF_LOCAL_KIND,
     CONF_MAP_NAME,
     CONF_MODEL,
     CONF_NAME,
@@ -40,10 +44,12 @@ from .const import (
     CONF_ROTATE,
     CONF_SCALE,
     CONF_SCAN_INTERVAL,
+    CONF_SOURCE,
     CONF_STORE_RAW_MAP,
     CONF_THEME,
     CONF_TOKEN,
     CONF_TRIM,
+    CONF_URL,
     CONF_USER_ID,
     CONF_USERNAME,
     DEFAULT_COUNTRY,
@@ -54,12 +60,19 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_THEME,
     DOMAIN,
+    LOCAL_KIND_RRMAP,
+    LOCAL_KIND_VALETUDO,
     MAX_IDLE_INTERVAL,
     MAX_SCAN_INTERVAL,
     MIN_IDLE_INTERVAL,
     MIN_SCAN_INTERVAL,
+    SOURCE_CLOUD,
+    SOURCE_LOCAL,
     THEMES,
 )
+from .provider import LocalMapFetcher, MapFetchError, parse_local_payload
+from .rr_map import RRMapError
+from .valetudo_map import ValetudoMapError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -139,9 +152,38 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
         self._auth = auth
         self._devices = [device for device in devices if device.is_supported]
 
-    # -- cloud account ---------------------------------------------------
+    # -- source selection ------------------------------------------------
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Ask whether the map comes from the cloud or from a local source."""
+        if user_input is not None:
+            if user_input.get(CONF_SOURCE) == SOURCE_LOCAL:
+                return await self.async_step_local()
+            return await self.async_step_cloud()
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_SOURCE, default=SOURCE_CLOUD): SelectSelector(
+                        SelectSelectorConfig(
+                            options=[
+                                {"value": SOURCE_CLOUD, "label": "Xiaomi cloud (Mi Home account)"},
+                                {
+                                    "value": SOURCE_LOCAL,
+                                    "label": "Local, no cloud (Valetudo / local map URL)",
+                                },
+                            ],
+                            mode=SelectSelectorMode.LIST,
+                        )
+                    )
+                }
+            ),
+        )
+
+    # -- cloud account ---------------------------------------------------
+
+    async def async_step_cloud(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for the Xiaomi account credentials."""
         errors: dict[str, str] = {}
         if user_input is not None:
@@ -161,7 +203,97 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 return await self.async_step_device()
 
-        return self.async_show_form(step_id="user", data_schema=self._auth_schema(user_input), errors=errors)
+        return self.async_show_form(step_id="cloud", data_schema=self._auth_schema(user_input), errors=errors)
+
+    # -- local source ----------------------------------------------------
+
+    async def async_step_local(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Configure a map source that does not need the Xiaomi cloud."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            url = str(user_input.get(CONF_URL) or "").strip()
+            kind = str(user_input.get(CONF_LOCAL_KIND) or LOCAL_KIND_VALETUDO)
+            username = str(user_input.get(CONF_USERNAME) or "").strip() or None
+            password = str(user_input.get(CONF_PASSWORD) or "") or None
+            token = str(user_input.get(CONF_BEARER_TOKEN) or "").strip() or None
+            name = str(user_input.get(CONF_NAME) or "").strip()
+
+            parsed = urlparse(url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                errors[CONF_URL] = "invalid_url"
+            else:
+                fetcher = LocalMapFetcher(
+                    self.hass,
+                    url=url,
+                    kind=kind,
+                    username=username,
+                    password=password,
+                    token=token,
+                )
+                try:
+                    payload = await fetcher.async_fetch()
+                    await self.hass.async_add_executor_job(parse_local_payload, payload)
+                except MapFetchError as err:
+                    _LOGGER.debug("The local map source is unreachable: %s", err)
+                    errors["base"] = "cannot_connect"
+                except (RRMapError, ValetudoMapError) as err:
+                    _LOGGER.debug("The local map source returned an unexpected document: %s", err)
+                    errors["base"] = "invalid_format"
+                else:
+                    await self.async_set_unique_id(hashlib.sha256(url.encode()).hexdigest()[:16])
+                    self._abort_if_unique_id_configured()
+                    title = name or parsed.hostname or "Local map"
+                    return self.async_create_entry(
+                        title=title,
+                        data={
+                            CONF_SOURCE: SOURCE_LOCAL,
+                            CONF_LOCAL_KIND: kind,
+                            CONF_URL: url,
+                            CONF_USERNAME: username or "",
+                            CONF_PASSWORD: password or "",
+                            CONF_BEARER_TOKEN: token or "",
+                            CONF_NAME: title,
+                            CONF_MODEL: "Valetudo" if kind == LOCAL_KIND_VALETUDO else "Local RRMap",
+                        },
+                    )
+
+        return self.async_show_form(step_id="local", data_schema=self._local_schema(user_input), errors=errors)
+
+    def _local_schema(self, defaults: dict[str, Any] | None = None) -> vol.Schema:
+        defaults = defaults or {}
+        return vol.Schema(
+            {
+                vol.Required(
+                    CONF_LOCAL_KIND, default=defaults.get(CONF_LOCAL_KIND, LOCAL_KIND_VALETUDO)
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=[
+                            {
+                                "value": LOCAL_KIND_VALETUDO,
+                                "label": "Valetudo — JSON from /api/v2/robot/state/map",
+                            },
+                            {"value": LOCAL_KIND_RRMAP, "label": "Raw RRMap file over HTTP (.gz / .bin)"},
+                        ],
+                        mode=SelectSelectorMode.LIST,
+                    )
+                ),
+                vol.Required(CONF_URL, default=defaults.get(CONF_URL, "")): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.URL)
+                ),
+                vol.Optional(CONF_USERNAME, default=defaults.get(CONF_USERNAME, "")): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.TEXT, autocomplete="username")
+                ),
+                vol.Optional(CONF_PASSWORD, default=""): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="current-password")
+                ),
+                vol.Optional(CONF_BEARER_TOKEN, default=""): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                ),
+                vol.Optional(CONF_NAME, default=defaults.get(CONF_NAME, "")): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.TEXT)
+                ),
+            }
+        )
 
     async def async_step_device(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Pick the vacuum and its LAN address."""
@@ -186,6 +318,7 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_TOKEN: device.token,
                         CONF_HOST: str(user_input[CONF_HOST]).strip(),
                         CONF_USER_ID: device.user_id or "",
+                        CONF_SOURCE: SOURCE_CLOUD,
                     },
                 )
 
@@ -237,6 +370,7 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
                                 CONF_TOKEN: token,
                                 CONF_HOST: host,
                                 CONF_USER_ID: device.user_id or "",
+                                CONF_SOURCE: SOURCE_CLOUD,
                             },
                         )
 

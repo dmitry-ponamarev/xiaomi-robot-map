@@ -30,6 +30,22 @@ CONF_TRIM = "trim"
 CONF_STORE_RAW_MAP = "store_raw_map"
 CONF_ROOM_NAMES = "room_names"
 
+# --- map sources ----------------------------------------------------------
+
+SOURCE_CLOUD = "cloud"
+SOURCE_LOCAL = "local"
+CONF_SOURCE = "source"
+CONF_LOCAL_KIND = "local_kind"
+CONF_URL = "url"
+CONF_BEARER_TOKEN = "bearer_token"
+
+LOCAL_KIND_VALETUDO = "valetudo"
+LOCAL_KIND_RRMAP = "rrmap"
+LOCAL_KINDS = [LOCAL_KIND_VALETUDO, LOCAL_KIND_RRMAP]
+
+DEFAULT_VALETUDO_PATH = "/api/v2/robot/state/map"
+LOCAL_TIMEOUT = 25
+
 # --- defaults -------------------------------------------------------------
 
 DEFAULT_NAME = "Robot Vacuum Map"

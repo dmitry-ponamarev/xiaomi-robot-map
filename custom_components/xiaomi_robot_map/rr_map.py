@@ -449,7 +449,7 @@ def _parse_submap(data: bytes) -> tuple[set[int], set[int]]:
     return carpets, removed
 
 
-def _build_rooms(image: MapImage) -> dict[int, Room]:
+def build_rooms(image: MapImage) -> dict[int, Room]:
     """Collect a bounding box per room segment from the bitmap."""
     boxes: dict[int, list[int]] = {}
     pixels = image.pixels
@@ -482,7 +482,7 @@ def _build_rooms(image: MapImage) -> dict[int, Room]:
     }
 
 
-def _vacuum_room(image: MapImage, position: Point | None) -> int | None:
+def vacuum_room_at(image: MapImage, position: Point | None) -> int | None:
     if position is None:
         return None
     pixel = image.pixel_at_map_position(position.x, position.y)
@@ -556,8 +556,8 @@ def parse_rrmap(raw: bytes) -> RRMap:
         _apply_image(result, header, block, block_data_length)
 
     if result.image is not None:
-        result.rooms = _build_rooms(result.image)
-        result.vacuum_room = _vacuum_room(result.image, result.vacuum_position)
+        result.rooms = build_rooms(result.image)
+        result.vacuum_room = vacuum_room_at(result.image, result.vacuum_position)
 
     return result
 

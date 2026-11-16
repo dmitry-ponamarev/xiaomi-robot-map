@@ -15,21 +15,27 @@ from homeassistant.helpers.typing import ConfigType
 from .cloud import XiaomiCloudClient
 from .const import (
     ATTR_CONFIG_ENTRY_ID,
+    CONF_BEARER_TOKEN,
     CONF_COUNTRY,
     CONF_DEVICE_ID,
     CONF_HOST,
+    CONF_LOCAL_KIND,
     CONF_MAP_NAME,
     CONF_PASSWORD,
+    CONF_SOURCE,
     CONF_TOKEN,
+    CONF_URL,
     CONF_USER_ID,
     CONF_USERNAME,
     DOMAIN,
+    LOCAL_KIND_RRMAP,
     PLATFORMS,
     SERVICE_GET_MAP,
     SERVICE_REFRESH,
+    SOURCE_LOCAL,
 )
 from .coordinator import MapCoordinator
-from .provider import MapFetcher
+from .provider import LocalMapFetcher, MapFetcher
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,8 +44,8 @@ _LOGGER = logging.getLogger(__name__)
 class XiaomiRobotMapRuntimeData:
     """Objects shared by all platforms of one config entry."""
 
-    client: XiaomiCloudClient
-    fetcher: MapFetcher
+    client: XiaomiCloudClient | None
+    fetcher: MapFetcher | LocalMapFetcher
     coordinator: MapCoordinator
 
 
@@ -53,22 +59,33 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: XiaomiRobotMapConfigEntry) -> bool:
     """Set up one vacuum."""
-    session = async_get_clientsession(hass)
-    client = XiaomiCloudClient(
-        session,
-        username=entry.data.get(CONF_USERNAME),
-        password=entry.data.get(CONF_PASSWORD),
-    )
-    fetcher = MapFetcher(
-        hass,
-        client,
-        host=entry.data.get(CONF_HOST),
-        token=entry.data.get(CONF_TOKEN, ""),
-        country=entry.data.get(CONF_COUNTRY, "de"),
-        user_id=entry.data.get(CONF_USER_ID),
-        device_id=entry.data.get(CONF_DEVICE_ID),
-        map_name_override=entry.options.get(CONF_MAP_NAME) or None,
-    )
+    client: XiaomiCloudClient | None = None
+    if entry.data.get(CONF_SOURCE) == SOURCE_LOCAL:
+        fetcher: MapFetcher | LocalMapFetcher = LocalMapFetcher(
+            hass,
+            url=entry.data[CONF_URL],
+            kind=entry.data.get(CONF_LOCAL_KIND, LOCAL_KIND_RRMAP),
+            username=entry.data.get(CONF_USERNAME),
+            password=entry.data.get(CONF_PASSWORD),
+            token=entry.data.get(CONF_BEARER_TOKEN),
+        )
+    else:
+        session = async_get_clientsession(hass)
+        client = XiaomiCloudClient(
+            session,
+            username=entry.data.get(CONF_USERNAME),
+            password=entry.data.get(CONF_PASSWORD),
+        )
+        fetcher = MapFetcher(
+            hass,
+            client,
+            host=entry.data.get(CONF_HOST),
+            token=entry.data.get(CONF_TOKEN, ""),
+            country=entry.data.get(CONF_COUNTRY, "de"),
+            user_id=entry.data.get(CONF_USER_ID),
+            device_id=entry.data.get(CONF_DEVICE_ID),
+            map_name_override=entry.options.get(CONF_MAP_NAME) or None,
+        )
     coordinator = MapCoordinator(hass, entry, client, fetcher)
 
     await coordinator.async_config_entry_first_refresh()
