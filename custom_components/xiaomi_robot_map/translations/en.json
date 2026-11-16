@@ -104,6 +104,12 @@
           "map_name": "Map name override (leave empty for auto)",
           "room_names": "Room names, e.g. 1: Kitchen, 2: Living room",
           "store_raw_map": "Store the raw map on disk for diagnostics"
+        },
+        "data_description": {
+          "map_name": "Troubleshooting only. Leave empty: the integration asks the robot for the name it uploaded. Do not put a camera or sensor entity id here."
+        },
+        "error": {
+          "invalid_map_name": "This looks like an entity id or a link, not a map name. Leave the field empty to detect the map automatically."
         }
       }
     }

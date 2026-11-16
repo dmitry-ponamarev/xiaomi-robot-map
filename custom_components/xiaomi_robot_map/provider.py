@@ -116,11 +116,20 @@ class MapFetcher:
         try:
             url = await self._client.async_get_map_url(device, map_name)
         except XiaomiApiError as err:
-            if self._map_name_override or not _is_unknown_object(err):
+            if not _is_unknown_object(err):
                 raise
             # The robot reports a new map name after every new map, so a cached
-            # name may already be stale: ask the robot again and retry once.
-            _LOGGER.debug("The cloud rejected map '%s' (%s); asking the robot again", map_name, err)
+            # name may already be stale, and a hand written name may simply be
+            # wrong: ask the robot again and retry once.
+            if self._map_name_override:
+                _LOGGER.warning(
+                    "The cloud does not know the configured map name '%s'; falling back to the "
+                    "name reported by the robot",
+                    self._map_name_override,
+                )
+                self._map_name_override = None
+            else:
+                _LOGGER.debug("The cloud rejected map '%s' (%s); asking the robot again", map_name, err)
             self.invalidate_cache()
             map_name = await self.async_get_map_name()
             url = await self._client.async_get_map_url(device, map_name)

@@ -763,10 +763,21 @@ class XiaomiRobotMapOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         if user_input is not None:
             options = dict(user_input)
+            map_name = str(options.get(CONF_MAP_NAME) or "").strip()
+            if map_name and not _looks_like_map_object(map_name):
+                return self.async_show_form(
+                    step_id="init",
+                    data_schema=self._options_schema(),
+                    errors={CONF_MAP_NAME: "invalid_map_name"},
+                )
             options[CONF_ROOM_NAMES] = _parse_room_names(options.get(CONF_ROOM_NAMES, ""))
             options[CONF_TRIM] = _normalise_trim(options.get(CONF_TRIM, ""))
             return self.async_create_entry(title="", data=options)
 
+        return self.async_show_form(step_id="init", data_schema=self._options_schema())
+
+    def _options_schema(self) -> vol.Schema:
+        """Build the options form, pre-filled with the stored values."""
         current = {**self._entry.data, **self._entry.options}
         layers = current.get(CONF_LAYERS) or DEFAULT_LAYERS
         schema = vol.Schema(
@@ -817,7 +828,14 @@ class XiaomiRobotMapOptionsFlow(OptionsFlow):
                 ): BooleanSelector(),
             }
         )
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return schema
+
+
+def _looks_like_map_object(value: str) -> bool:
+    """Reject entity ids and URLs typed into the map name field."""
+    if re.match(r"^[a-z_]+\.[a-z0-9_]+$", value, re.IGNORECASE):
+        return False
+    return not value.lower().startswith(("http://", "https://", "www."))
 
 
 def _parse_room_names(value: Any) -> dict[str, str]:

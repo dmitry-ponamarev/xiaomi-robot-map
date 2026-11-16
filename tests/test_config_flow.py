@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from custom_components.xiaomi_robot_map.cloud import CloudDevice, XiaomiAuthError, XiaomiCloudError
 from custom_components.xiaomi_robot_map.const import (
     CONF_COUNTRY,
@@ -11,6 +13,7 @@ from custom_components.xiaomi_robot_map.const import (
     CONF_HOST,
     CONF_LAYERS,
     CONF_LOCAL_KIND,
+    CONF_MAP_NAME,
     CONF_PASSWORD,
     CONF_SCALE,
     CONF_SCAN_INTERVAL,
@@ -374,6 +377,26 @@ async def test_options_flow(hass, config_entry) -> None:
     assert options[CONF_LAYERS] == ["robot", "charger", "path"]
     assert options["room_names"] == {"1": "Kitchen", "2": "Hall"}
     assert options["trim"] == "5,0,5,0"
+
+
+@pytest.mark.parametrize("value", ["camera.1floormap", "sensor.x", "https://example.com/map.gz"])
+async def test_options_rejects_a_non_map_name(hass, config_entry, value) -> None:
+    """An entity id or a link in the map name field is a typo, not a map."""
+    config_entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_MAP_NAME: value})
+    assert result["type"] == "form"
+    assert result["errors"][CONF_MAP_NAME] == "invalid_map_name"
+
+
+async def test_options_accepts_a_real_map_name(hass, config_entry) -> None:
+    config_entry.add_to_hass(hass)
+    result = await hass.config_entries.options.async_init(config_entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {CONF_MAP_NAME: "rubysc1/322045301/13"}
+    )
+    assert result["type"] == "create_entry"
+    assert result["data"][CONF_MAP_NAME] == "rubysc1/322045301/13"
 
 
 async def test_options_ignores_garbage_trim(hass, config_entry) -> None:

@@ -98,9 +98,9 @@ async def test_fetch_does_not_retry_on_other_cloud_errors(hass, map_names) -> No
     assert client.downloads == 0
 
 
-async def test_fetch_keeps_a_configured_map_name(hass, map_names) -> None:
-    """An explicit map name is never replaced by a robot lookup."""
-    map_names("unused")
+async def test_fetch_falls_back_when_the_configured_name_is_unknown(hass, map_names) -> None:
+    """A hand written map name that the cloud rejects does not break the map."""
+    map_names("robot-map")
     client = FakeClient(error=XiaomiApiError("objectname invalid"))
     fetcher = MapFetcher(
         hass,
@@ -113,10 +113,10 @@ async def test_fetch_keeps_a_configured_map_name(hass, map_names) -> None:
         map_name_override="manual-map",
     )
 
-    with pytest.raises(XiaomiApiError):
-        await fetcher.async_fetch()
+    payload = await fetcher.async_fetch()
 
-    assert client.object_names == ["manual-map"]
+    assert client.object_names == ["manual-map", "robot-map"]
+    assert payload.map_name == "robot-map"
 
 
 async def test_fetch_reports_a_missing_download_url(hass, map_names) -> None:
