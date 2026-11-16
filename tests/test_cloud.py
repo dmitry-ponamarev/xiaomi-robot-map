@@ -183,13 +183,17 @@ async def test_captcha_answer_uses_capt_code_and_keeps_the_sign() -> None:
     assert client._sign == "ORIGINAL-SIGN"
 
 
-async def test_answer_captcha_never_requests_a_new_sign(monkeypatch) -> None:
-    """A new ``_sign`` means a new challenge, so the typed code could not match."""
+async def test_answer_captcha_restores_the_captcha_cookie(monkeypatch) -> None:
+    """The captcha is identified by ``ick``; a fresh challenge would replace it."""
     from tests.conftest import REAL_ANSWER_CAPTCHA
 
     client = XiaomiCloudClient(session=DummySession())  # type: ignore[arg-type]
     monkeypatch.setattr(XiaomiCloudClient, "async_answer_captcha", REAL_ANSWER_CAPTCHA)
-    client._sign = "ORIGINAL-SIGN"
+    client._captcha_ick = "CHALLENGE-ICK"
+
+    restored: list[dict[str, str]] = []
+    client._session.cookie_jar.update_cookies = lambda cookies, *a, **k: restored.append(cookies)  # type: ignore[union-attr]
+
     calls: list[object] = []
 
     async def _step_1() -> str:
@@ -208,8 +212,8 @@ async def test_answer_captcha_never_requests_a_new_sign(monkeypatch) -> None:
 
     await client.async_answer_captcha("ABCD")
 
-    assert calls == [("step2", "ABCD"), "step3"]
-    assert client._sign == "ORIGINAL-SIGN"
+    assert restored == [{"ick": "CHALLENGE-ICK"}]
+    assert calls == ["step1", ("step2", "ABCD"), "step3"]
 
 
 async def test_answer_captcha_without_a_challenge_fails_cleanly(monkeypatch) -> None:

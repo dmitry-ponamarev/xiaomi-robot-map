@@ -70,10 +70,12 @@ def test_errors_are_translated(lang: str) -> None:
 
 
 @pytest.mark.parametrize("lang", ["ru", "en"])
-def test_captcha_description_has_placeholders(lang: str) -> None:
+def test_captcha_description_links_to_the_image(lang: str) -> None:
+    """Only a link is shown: an embedded image never rendered in the dialog."""
     description = _load(lang)["config"]["step"]["captcha"]["description"]
-    assert "{image_markdown}" in description
     assert "{image_url}" in description
+    assert "]({image_url})" in description
+    assert "{image_markdown}" not in description
 
 
 @pytest.mark.parametrize("lang", ["ru", "en"])

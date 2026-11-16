@@ -24,6 +24,7 @@ from typing import Any
 
 import aiohttp
 from Crypto.Cipher import ARC4
+from yarl import URL
 
 from .const import AVAILABLE_COUNTRIES
 
@@ -127,6 +128,7 @@ class XiaomiCloudClient:
         self._agent = _generate_agent()
         self._device_id = device_id or _generate_device_id()
         self._sign: str | None = None
+        self._captcha_ick: str | None = None
         self._ssecurity: str | None = None
         self._user_id: str | None = None
         self._c_user_id: str | None = None
@@ -173,18 +175,55 @@ class XiaomiCloudClient:
         await self._async_login_step_3()
 
     async def async_answer_captcha(self, code: str) -> None:
-        """Answer the captcha of the challenge that was already issued.
+        """Answer the captcha shown to the user.
 
-        Xiaomi ties the captcha to the ``_sign`` returned by ``serviceLogin``:
-        asking for a fresh sign generates a *different* challenge, so a code read
-        from the picture that was shown can never match. The retry therefore
-        reuses the stored sign and only adds ``captchaCode``.
+        Xiaomi identifies the captcha instance by the ``ick`` cookie that the
+        image request sets. ``serviceLogin`` issues a fresh ``ick`` with every new
+        challenge, so the challenge's ``ick`` is captured and restored before the
+        answer is posted - otherwise the code read from the picture is validated
+        against a captcha nobody has seen and every answer comes back as 87001.
         """
-        if not self._sign:
-            raise XiaomiCloudError("there is no pending login challenge to answer")
+        if not self._captcha_ick:
+            raise XiaomiCloudError("there is no pending captcha to answer")
+        self._use_captcha_cookie()
         self.auth_url = None
+        self._sign = await self._async_login_step_1()
         await self._async_login_step_2(code)
         await self._async_login_step_3()
+
+    def _use_captcha_cookie(self) -> None:
+        """Put the challenge's ``ick`` cookie back into the session."""
+        if not self._captcha_ick:
+            return
+        try:
+            self._session.cookie_jar.update_cookies(
+                {"ick": self._captcha_ick}, URL("https://account.xiaomi.com/")
+            )
+        except (AttributeError, TypeError) as err:  # unusual cookie jar
+            _LOGGER.debug("Unable to restore the captcha cookie: %s", err)
+
+    def _remember_captcha(self, url: str) -> None:
+        """Keep the URL of the captcha just issued (``ick`` comes with its image)."""
+        self.auth_url = url
+        self._captcha_ick = None
+
+    def _capture_captcha_cookie(self, cookies: Any = None) -> None:
+        """Store the ``ick`` cookie: the captcha instance is identified by it."""
+        value = None
+        if cookies is not None:
+            try:
+                value = cookies.get("ick").value  # type: ignore[union-attr]
+            except (AttributeError, KeyError):
+                value = None
+        if not value:
+            try:
+                for cookie in self._session.cookie_jar:
+                    if cookie.key == "ick":
+                        value = cookie.value
+                        break
+            except (AttributeError, TypeError) as err:
+                _LOGGER.debug("Unable to read the captcha cookie: %s", err)
+        self._captcha_ick = value
 
     async def _async_login_step_1(self) -> str:
         url = f"{LOGIN_URL}?sid=xiaomiio&_json=true"
@@ -242,7 +281,7 @@ class XiaomiCloudClient:
         if not payload.get("ssecurity"):
             code = payload.get("code")
             if payload.get("captchaUrl"):
-                self.auth_url = str(payload["captchaUrl"])
+                self._remember_captcha(str(payload["captchaUrl"]))
                 _LOGGER.warning(
                     "Xiaomi asks for a captcha for this account/IP (code %s). Log in once from the "
                     "Home Assistant network in a browser, then retry.",
@@ -284,15 +323,15 @@ class XiaomiCloudClient:
     async def async_fetch_captcha(self, url: str) -> bytes:
         """Download the captcha image Xiaomi asked for (same session/cookies)."""
         absolute = url if url.startswith("http") else f"https://account.xiaomi.com{url}"
-        # a fresh image for the current challenge, never a cached one
-        separator = "&" if "?" in absolute else "?"
-        absolute = f"{absolute}{separator}_t={int(time.time() * 1000)}"
         try:
             async with self._session.get(
                 absolute, headers={"User-Agent": self._agent}, timeout=TIMEOUT
             ) as response:
                 if response.status != 200:
                     raise XiaomiCloudError(f"captcha download failed with HTTP {response.status}")
+                # the image response carries the ``ick`` cookie that identifies
+                # this captcha instance - the answer must be posted with it
+                self._capture_captcha_cookie(response.cookies)
                 data = await response.read()
         except (aiohttp.ClientError, TimeoutError) as err:
             raise XiaomiCloudError(f"unable to download the captcha: {err}") from err

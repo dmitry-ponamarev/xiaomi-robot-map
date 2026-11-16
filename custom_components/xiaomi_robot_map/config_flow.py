@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import logging
 import re
 from typing import Any
@@ -24,6 +25,7 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
     TextSelectorType,
 )
+from PIL import Image
 
 from .cloud import (
     CloudDevice,
@@ -89,6 +91,23 @@ from .rr_map import RRMapError
 from .valetudo_map import ValetudoMapError
 
 _LOGGER = logging.getLogger(__name__)
+
+CAPTCHA_SCALE = 4
+
+
+def _enlarge_captcha(data: bytes) -> bytes:
+    """Scale the tiny (125x42) Xiaomi captcha up so people can read it."""
+    try:
+        image = Image.open(io.BytesIO(data)).convert("RGB")
+        image = image.resize(
+            (image.width * CAPTCHA_SCALE, image.height * CAPTCHA_SCALE), Image.LANCZOS
+        )
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+    except (OSError, ValueError) as err:  # not an image after all
+        _LOGGER.debug("Unable to enlarge the captcha: %s", err)
+        return data
+    return buffer.getvalue()
 
 
 def _auth_detail(err: XiaomiAuthError) -> str:
@@ -276,51 +295,86 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
     # -- captcha ---------------------------------------------------------
 
     async def async_step_captcha(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Show the captcha image and submit the typed code."""
-        errors: dict[str, str] = {}
-        detail = ""
+        """Link to the captcha image and submit the typed code."""
         if self._pending_client is None:
             return await self.async_step_cloud()
 
-        if user_input is not None:
-            code = str(user_input.get(CONF_CAPTCHA_CODE) or "").strip()
-            if not code:
-                errors[CONF_CAPTCHA_CODE] = "invalid_captcha"
-            else:
-                try:
-                    await self._async_login_and_get_devices(self._auth, captcha_code=code)
-                except XiaomiCaptchaRequired as err:
-                    _LOGGER.debug("The captcha answer was rejected")
-                    self._captcha_url = err.url
-                    errors["base"] = "invalid_captcha"
-                except XiaomiTwoFactorRequired as err:
-                    errors["base"] = "two_factor"
-                    detail = err.url
-                except XiaomiAuthError as err:
-                    errors["base"] = "invalid_auth"
-                    detail = _auth_detail(err)
-                except XiaomiCloudError as err:
-                    errors["base"] = "cannot_connect"
-                    detail = str(err)
-                else:
-                    return await self.async_step_device()
+        if user_input is None:
+            return await self._async_show_captcha({})
 
-        image_markdown, image_url, image_error = await self._async_store_captcha()
+        # spaces and dashes are noise people add while copying a distorted code
+        code = "".join(char for char in str(user_input.get(CONF_CAPTCHA_CODE) or "") if char.isalnum())
+        if not code:
+            # the empty field is the documented "give me another captcha" action
+            return await self._async_new_challenge({})
+
+        for variant in dict.fromkeys((code, code.upper(), code.lower())):
+            try:
+                await self._async_login_and_get_devices(self._auth, captcha_code=variant)
+            except XiaomiCaptchaRequired as err:
+                _LOGGER.debug("Captcha answer %r was rejected by Xiaomi", variant)
+                self._captcha_url = err.url
+                continue
+            except XiaomiTwoFactorRequired as err:
+                self._two_factor_url = err.url
+                return await self.async_step_two_factor()
+            except XiaomiAuthError as err:
+                await self._release_client()
+                return self.async_show_form(
+                    step_id="cloud",
+                    data_schema=self._auth_schema(None),
+                    errors={"base": "invalid_auth"},
+                    description_placeholders={"detail": _auth_detail(err)},
+                )
+            except XiaomiCloudError as err:
+                return await self._async_show_captcha({"base": "cannot_connect"}, str(err))
+            else:
+                return await self.async_step_device()
+
+        return await self._async_new_challenge({"base": "invalid_captcha"})
+
+    async def _async_new_challenge(self, errors: dict[str, str]) -> ConfigFlowResult:
+        """Start a fresh login so Xiaomi issues a new captcha."""
+        await self._release_client()
+        try:
+            await self._async_login_and_get_devices(self._auth)
+        except XiaomiCaptchaRequired as err:
+            self._captcha_url = err.url
+        except XiaomiTwoFactorRequired as err:
+            self._two_factor_url = err.url
+            return await self.async_step_two_factor()
+        except XiaomiAuthError as err:
+            await self._release_client()
+            return self.async_show_form(
+                step_id="cloud",
+                data_schema=self._auth_schema(None),
+                errors={"base": "invalid_auth"},
+                description_placeholders={"detail": _auth_detail(err)},
+            )
+        except XiaomiCloudError as err:
+            return await self._async_show_captcha({"base": "cannot_connect"}, str(err))
+        else:
+            return await self.async_step_device()
+        return await self._async_show_captcha(errors)
+
+    async def _async_show_captcha(self, errors: dict[str, str], detail: str = "") -> ConfigFlowResult:
+        """Render the captcha step with a link to a readable image."""
+        image_url, image_error = await self._async_store_captcha()
         if image_error:
             detail = f"{detail}\n{image_error}".strip()
         if not image_url:
-            detail = f"{detail}\nАккаунт Xiaomi требует капчу, но Home Assistant не смог её показать.".strip()
+            detail = f"{detail}\nАккаунт Xiaomi требует капчу, но Home Assistant не смог подготовить ссылку.".strip()
         return self.async_show_form(
             step_id="captcha",
             data_schema=vol.Schema(
-                {vol.Required(CONF_CAPTCHA_CODE): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))}
+                {
+                    vol.Optional(CONF_CAPTCHA_CODE, default=""): TextSelector(
+                        TextSelectorConfig(type=TextSelectorType.TEXT)
+                    )
+                }
             ),
             errors=errors,
-            description_placeholders={
-                "image_markdown": image_markdown,
-                "image_url": image_url,
-                "detail": detail,
-            },
+            description_placeholders={"image_url": image_url, "detail": detail},
         )
 
     # -- two factor ------------------------------------------------------
@@ -354,22 +408,22 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"url": self._two_factor_url or "", "detail": detail},
         )
 
-    async def _async_store_captcha(self) -> tuple[str, str, str]:
-        """Prepare the captcha image: inline markdown, view link, error text."""
+    async def _async_store_captcha(self) -> tuple[str, str]:
+        """Fetch the captcha, enlarge it for readability, return its link."""
         client = self._pending_client
         url = self._captcha_url or (client.auth_url if client is not None else None)
         if client is None or not url:
-            return "", "", "Не удалось определить адрес капчи — попробуйте войти заново."
+            return "", "Не удалось определить адрес капчи — попробуйте войти заново."
         try:
             data = await client.async_fetch_captcha(url)
         except XiaomiCloudError as err:
             _LOGGER.warning("Unable to download the Xiaomi captcha: %s", err)
-            return "", "", f"Не удалось загрузить картинку капчи: {err}"
+            return "", f"Не удалось загрузить картинку капчи: {err}"
 
+        enlarged = await self.hass.async_add_executor_job(_enlarge_captcha, data)
         async_register_captcha_view(self.hass)
-        store_captcha(self.hass, self.flow_id, data)
-        url = captcha_url(self.hass, self.flow_id)
-        return f"![captcha]({url})", url, ""
+        store_captcha(self.hass, self.flow_id, enlarged)
+        return captcha_url(self.hass, self.flow_id), ""
 
     # -- local source ----------------------------------------------------
 

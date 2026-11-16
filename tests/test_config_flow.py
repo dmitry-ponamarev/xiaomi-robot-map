@@ -120,7 +120,7 @@ async def test_captcha_flow(hass, monkeypatch) -> None:
     placeholders = result["description_placeholders"]
     image_url = placeholders["image_url"]
     assert "/api/xiaomi_robot_map/captcha/" in image_url
-    assert placeholders["image_markdown"] == f"![captcha]({image_url})"
+    assert "image_markdown" not in placeholders
     from custom_components.xiaomi_robot_map.http_views import _storage
 
     stored = _storage(hass)
@@ -152,7 +152,6 @@ async def test_captcha_rejected(hass, monkeypatch) -> None:
     assert result["type"] == "form"
     assert result["step_id"] == "captcha"
     assert result["errors"] == {"base": "invalid_captcha"}
-    assert result["description_placeholders"]["image_markdown"].startswith("![captcha](")
     from custom_components.xiaomi_robot_map.http_views import _storage
 
     assert list(_storage(hass).values())[-1][1] == "image/jpeg"
@@ -335,6 +334,55 @@ async def test_options_ignores_garbage_trim(hass, config_entry) -> None:
     result = await hass.config_entries.options.async_init(config_entry.entry_id)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"trim": "a,b,c,d"})
     assert result["data"]["trim"] == "0,0,0,0"
+
+
+async def test_captcha_accepts_a_case_variant(hass, monkeypatch) -> None:
+    """People copy the code in the wrong case; the uppercase form is tried too."""
+    from custom_components.xiaomi_robot_map.cloud import XiaomiCaptchaRequired
+
+    async def _login(self):
+        raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.1")
+
+    async def _answer(self, code):
+        if code != "ABCD":
+            raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.2")
+
+    async def _captcha(self, url):
+        return b"\xff\xd8" + b"0" * 24
+
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_answer_captcha", _answer)
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_fetch_captcha", _captcha)
+
+    result = await _start(hass, "cloud")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"captcha_code": "abcd"})
+    assert result["step_id"] == "device"
+
+
+async def test_empty_captcha_field_requests_a_new_picture(hass, monkeypatch) -> None:
+    from custom_components.xiaomi_robot_map.cloud import XiaomiCaptchaRequired
+
+    logins = []
+
+    async def _login(self):
+        logins.append(1)
+        raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.1")
+
+    async def _captcha(self, url):
+        return b"\xff\xd8" + b"0" * 24
+
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_fetch_captcha", _captcha)
+
+    result = await _start(hass, "cloud")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+    assert result["step_id"] == "captcha"
+    assert len(logins) == 1
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"captcha_code": ""})
+    assert result["step_id"] == "captcha"
+    assert len(logins) == 2, "an empty field must start a new challenge"
 
 
 async def test_captcha_view_serves_the_image(hass, hass_client, hass_access_token) -> None:
