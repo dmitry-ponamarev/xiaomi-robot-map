@@ -24,6 +24,11 @@
   [lovelace-xiaomi-vacuum-map-card](https://github.com/PiotrMachowski/lovelace-xiaomi-vacuum-map-card)
   через атрибут `calibration_points`.
 
+## Требования
+
+Home Assistant 2025.1 или новее, Python 3.13 (в HA OS/Supervised уже так).
+Проверено на Home Assistant 2026.2.3.
+
 ## Поддерживаемые устройства
 
 Поддерживаются роботы с форматом карты **RRMap** (облачный API `getmapfileurl`):
