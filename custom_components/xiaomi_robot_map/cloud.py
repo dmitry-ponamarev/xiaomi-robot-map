@@ -48,12 +48,32 @@ class XiaomiCloudError(Exception):
 class XiaomiAuthError(XiaomiCloudError):
     """Raised when the account credentials are rejected."""
 
+    def __init__(self, message: str, *, code: int | None = None, description: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.description = description or message
+
+    @property
+    def detail(self) -> str:
+        """Short technical detail for the setup form."""
+        if self.code is None:
+            return self.description
+        return f"{self.code}: {self.description}"
+
 
 class XiaomiTwoFactorRequired(XiaomiAuthError):
     """Raised when Xiaomi asks for an extra verification step."""
 
     def __init__(self, url: str) -> None:
-        super().__init__(f"additional authentication required: {url}")
+        super().__init__(f"additional authentication required: {url}", description="two factor")
+        self.url = url
+
+
+class XiaomiCaptchaRequired(XiaomiAuthError):
+    """Raised when Xiaomi wants a captcha, which the UI cannot render."""
+
+    def __init__(self, url: str) -> None:
+        super().__init__(f"captcha required: {url}", description="captcha required")
         self.url = url
 
 
@@ -93,11 +113,14 @@ class XiaomiCloudClient:
 
     def __init__(
         self,
-        session: aiohttp.ClientSession,
+        session: aiohttp.ClientSession | None,
         username: str | None = None,
         password: str | None = None,
     ) -> None:
-        self._session = session
+        # A private cookie jar keeps this account's login cookies away from the
+        # shared Home Assistant session (and from stale cookies of old attempts).
+        self._owns_session = session is None
+        self._session = session or aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar())
         self._username = username
         self._password = password
         self._agent = _generate_agent()
@@ -123,6 +146,12 @@ class XiaomiCloudClient:
     @property
     def logged_in(self) -> bool:
         return self._service_token is not None
+
+    async def async_close(self) -> None:
+        """Release the private HTTP session, if this client created one."""
+        if self._owns_session and not self._session.closed:
+            await self._session.close()
+            self._owns_session = False
 
     @property
     def user_id(self) -> str | None:
@@ -179,11 +208,24 @@ class XiaomiCloudClient:
         if not isinstance(payload, dict):
             raise XiaomiAuthError("login step 2 failed: unexpected response")
         if not payload.get("ssecurity"):
+            code = payload.get("code")
+            if payload.get("captchaUrl"):
+                self.auth_url = str(payload["captchaUrl"])
+                _LOGGER.warning(
+                    "Xiaomi asks for a captcha for this account/IP (code %s). Log in once from the "
+                    "Home Assistant network in a browser, then retry.",
+                    code,
+                )
+                raise XiaomiCaptchaRequired(str(payload["captchaUrl"]))
             if url := payload.get("notificationUrl"):
                 self.auth_url = url
                 raise XiaomiTwoFactorRequired(url)
-            description = payload.get("desc") or payload.get("description") or "invalid credentials"
-            raise XiaomiAuthError(str(description))
+            description = str(
+                payload.get("desc") or payload.get("description") or "login rejected by Xiaomi"
+            )
+            _LOGGER.warning("Xiaomi rejected the login: code=%s, description=%s", code, description)
+            raise XiaomiAuthError(description, code=code if isinstance(code, int) else None,
+                                  description=description)
 
         self._ssecurity = str(payload["ssecurity"])
         self._user_id = str(payload.get("userId"))

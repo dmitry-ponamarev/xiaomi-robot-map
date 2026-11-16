@@ -95,6 +95,31 @@ async def test_cloud_unreachable(hass, monkeypatch) -> None:
     assert result["errors"] == {"base": "cannot_connect"}
 
 
+async def test_captcha_required(hass, monkeypatch) -> None:
+    from custom_components.xiaomi_robot_map.cloud import XiaomiCaptchaRequired
+
+    async def _login(self, *args, **kwargs):
+        raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.1")
+
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
+    result = await _start(hass, "cloud")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+    assert result["type"] == "form"
+    assert result["errors"] == {"base": "captcha_required"}
+    assert "captcha" in result["description_placeholders"]["detail"].lower()
+
+
+async def test_invalid_auth_shows_xiaomi_code(hass, monkeypatch) -> None:
+    async def _login(self, *args, **kwargs):
+        raise XiaomiAuthError("登录验证失败", code=70016, description="登录验证失败")
+
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
+    result = await _start(hass, "cloud")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+    assert result["errors"] == {"base": "invalid_auth"}
+    assert result["description_placeholders"]["detail"] == "Xiaomi: 70016: 登录验证失败"
+
+
 async def test_no_devices(hass, monkeypatch) -> None:
     async def _devices(self, countries=None):
         return []

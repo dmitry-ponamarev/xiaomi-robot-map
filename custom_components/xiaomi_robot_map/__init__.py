@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
 from .cloud import XiaomiCloudClient
@@ -70,9 +69,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: XiaomiRobotMapConfigEntr
             token=entry.data.get(CONF_BEARER_TOKEN),
         )
     else:
-        session = async_get_clientsession(hass)
         client = XiaomiCloudClient(
-            session,
+            None,
             username=entry.data.get(CONF_USERNAME),
             password=entry.data.get(CONF_PASSWORD),
         )
@@ -102,6 +100,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: XiaomiRobotMapConfigEntr
 async def async_unload_entry(hass: HomeAssistant, entry: XiaomiRobotMapConfigEntry) -> bool:
     """Unload a config entry."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    client = entry.runtime_data.client if entry.runtime_data else None
+    if client is not None:
+        await client.async_close()
     if unloaded and not _active_entries(hass):
         for service in (SERVICE_GET_MAP, SERVICE_REFRESH):
             hass.services.async_remove(DOMAIN, service)

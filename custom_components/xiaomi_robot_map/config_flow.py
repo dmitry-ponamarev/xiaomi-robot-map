@@ -12,7 +12,6 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     BooleanSelector,
     NumberSelector,
@@ -26,7 +25,14 @@ from homeassistant.helpers.selector import (
     TextSelectorType,
 )
 
-from .cloud import CloudDevice, XiaomiAuthError, XiaomiCloudClient, XiaomiCloudError
+from .cloud import (
+    CloudDevice,
+    XiaomiAuthError,
+    XiaomiCaptchaRequired,
+    XiaomiCloudClient,
+    XiaomiCloudError,
+    XiaomiTwoFactorRequired,
+)
 from .const import (
     AVAILABLE_COUNTRIES,
     CONF_BEARER_TOKEN,
@@ -76,6 +82,12 @@ from .valetudo_map import ValetudoMapError
 
 _LOGGER = logging.getLogger(__name__)
 
+
+def _auth_detail(err: XiaomiAuthError) -> str:
+    """Human readable technical detail shown under the login form."""
+    return f"Xiaomi: {err.detail}" if err.detail else ""
+
+
 MANUAL_DEVICE = "__manual__"
 TOKEN_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 
@@ -120,8 +132,10 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def _client(self, auth: dict[str, str] | None = None) -> XiaomiCloudClient:
         auth = auth or self._auth
+        # Each attempt gets a private cookie jar, so a previous failed login can
+        # never poison the next one.
         return XiaomiCloudClient(
-            async_get_clientsession(self.hass),
+            None,
             username=auth.get(CONF_USERNAME),
             password=auth.get(CONF_PASSWORD),
         )
@@ -147,8 +161,11 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def _async_login_and_get_devices(self, auth: dict[str, str]) -> None:
         client = self._client(auth)
-        await client.async_login()
-        devices = await client.async_get_devices([auth[CONF_COUNTRY]])
+        try:
+            await client.async_login()
+            devices = await client.async_get_devices([auth[CONF_COUNTRY]])
+        finally:
+            await client.async_close()
         self._auth = auth
         self._devices = [device for device in devices if device.is_supported]
 
@@ -186,6 +203,7 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_cloud(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for the Xiaomi account credentials."""
         errors: dict[str, str] = {}
+        detail = ""
         if user_input is not None:
             auth = {
                 CONF_USERNAME: str(user_input[CONF_USERNAME]).strip(),
@@ -194,16 +212,31 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             }
             try:
                 await self._async_login_and_get_devices(auth)
+            except XiaomiCaptchaRequired as err:
+                _LOGGER.debug("Xiaomi requires a captcha: %s", err)
+                errors["base"] = "captcha_required"
+                detail = _auth_detail(err)
+            except XiaomiTwoFactorRequired as err:
+                _LOGGER.debug("Xiaomi requires 2FA: %s", err)
+                errors["base"] = "two_factor"
+                detail = f"{err.url}"
             except XiaomiAuthError as err:
                 _LOGGER.debug("Xiaomi login failed: %s", err)
-                errors["base"] = "two_factor" if "additional authentication" in str(err) else "invalid_auth"
+                errors["base"] = "invalid_auth"
+                detail = _auth_detail(err)
             except XiaomiCloudError as err:
                 _LOGGER.debug("Xiaomi cloud is unreachable: %s", err)
                 errors["base"] = "cannot_connect"
+                detail = str(err)
             else:
                 return await self.async_step_device()
 
-        return self.async_show_form(step_id="cloud", data_schema=self._auth_schema(user_input), errors=errors)
+        return self.async_show_form(
+            step_id="cloud",
+            data_schema=self._auth_schema(user_input),
+            errors=errors,
+            description_placeholders={"detail": detail},
+        )
 
     # -- local source ----------------------------------------------------
 
@@ -395,12 +428,15 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_resolve_device(self, token: str) -> CloudDevice | None:
         """Find a device by token, searching all known countries if needed."""
         client = self._client()
-        await client.async_login()
         countries = [self._auth[CONF_COUNTRY]] + [c for c in AVAILABLE_COUNTRIES if c != self._auth[CONF_COUNTRY]]
-        for country in countries:
-            for device in await client.async_get_devices([country]):
-                if device.token.lower() == token and device.is_supported:
-                    return device
+        try:
+            await client.async_login()
+            for country in countries:
+                for device in await client.async_get_devices([country]):
+                    if device.token.lower() == token and device.is_supported:
+                        return device
+        finally:
+            await client.async_close()
         return None
 
     # -- reauth ----------------------------------------------------------
@@ -413,6 +449,7 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Ask for new credentials."""
         errors: dict[str, str] = {}
+        detail = ""
         entry = self._reauth_entry
         defaults = dict(entry.data) if entry else {}
         if user_input is not None:
@@ -423,10 +460,15 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             }
             try:
                 await self._async_login_and_get_devices(auth)
-            except XiaomiAuthError:
+            except XiaomiCaptchaRequired as err:
+                errors["base"] = "captcha_required"
+                detail = _auth_detail(err)
+            except XiaomiAuthError as err:
                 errors["base"] = "invalid_auth"
-            except XiaomiCloudError:
+                detail = _auth_detail(err)
+            except XiaomiCloudError as err:
                 errors["base"] = "cannot_connect"
+                detail = str(err)
             else:
                 if entry is None:
                     return self.async_abort(reason="reauth_failed")
@@ -444,6 +486,7 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             step_id="reauth_confirm",
             data_schema=self._auth_schema({**defaults, **(user_input or {})}),
             errors=errors,
+            description_placeholders={"detail": detail},
         )
 
     # -- options ---------------------------------------------------------

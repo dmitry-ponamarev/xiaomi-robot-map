@@ -10,7 +10,7 @@
       },
       "cloud": {
         "title": "Xiaomi account",
-        "description": "Sign in with the Mi Home account that owns the vacuum. The credentials are only used to download the map from the Xiaomi cloud.",
+        "description": "Sign in with the Mi Home account that owns the vacuum. The credentials are only used to download the map from the Xiaomi cloud.\n\n{detail}",
         "data": {
           "username": "Mi Home account (e-mail / phone)",
           "password": "Password",
@@ -48,7 +48,7 @@
       },
       "reauth_confirm": {
         "title": "Re-authenticate",
-        "description": "The Xiaomi cloud rejected the stored credentials. Enter the current password.",
+        "description": "The Xiaomi cloud rejected the stored credentials. Enter the current password.\n\n{detail}",
         "data": {
           "username": "Mi Home account (e-mail / phone)",
           "password": "Password",
@@ -65,7 +65,8 @@
       "invalid_token": "The token must contain exactly 32 hexadecimal characters.",
       "invalid_host": "Enter the local IP address of the vacuum.",
       "invalid_url": "Enter a full URL starting with http:// or https://.",
-      "invalid_format": "The endpoint answered, but the payload is neither a Valetudo map nor a valid RRMap file."
+      "invalid_format": "The endpoint answered, but the payload is neither a Valetudo map nor a valid RRMap file.",
+      "captcha_required": "Xiaomi asks for a captcha for this account or IP address. Log in once to Mi Home (web or app) from the same network as Home Assistant, then retry here. If the account was created in the Roborock app, it cannot be used with the Xiaomi cloud."
     },
     "abort": {
       "already_configured": "This vacuum is already configured.",

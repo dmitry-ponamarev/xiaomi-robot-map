@@ -17,6 +17,25 @@ from custom_components.xiaomi_robot_map.cloud import (
     _to_json,
 )
 
+
+class DummyJar:
+    """Minimal cookie jar stand-in for client unit tests."""
+
+    def update_cookies(self, *args, **kwargs) -> None:
+        return None
+
+
+class DummySession:
+    """Minimal aiohttp session stand-in (no sockets, no loop)."""
+
+    def __init__(self) -> None:
+        self.cookie_jar = DummyJar()
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 URL = "https://de.api.io.mi.com/app/home/getmapfileurl"
 SIGNED_NONCE = base64.b64encode(b"0123456789abcdef0123456789abcdef").decode()
 
@@ -52,7 +71,7 @@ def test_signature_matches_the_reference_implementation() -> None:
 
 
 def test_client_requires_login() -> None:
-    client = XiaomiCloudClient(session=None, username="user", password="secret")  # type: ignore[arg-type]
+    client = XiaomiCloudClient(session=DummySession(), username="user", password="secret")  # type: ignore[arg-type]
     assert client.logged_in is False
 
 
@@ -76,7 +95,7 @@ def test_generate_nonce_is_unique_and_decodable() -> None:
 
 
 async def test_get_map_url_uses_the_result_url(monkeypatch) -> None:
-    client = XiaomiCloudClient(session=None)  # type: ignore[arg-type]
+    client = XiaomiCloudClient(session=DummySession())  # type: ignore[arg-type]
     device = CloudDevice(
         device_id="1", name="vac", model="roborock.vacuum.s5", token="t", country="de", user_id="42"
     )
@@ -92,7 +111,7 @@ async def test_get_map_url_uses_the_result_url(monkeypatch) -> None:
 
 
 async def test_get_map_url_falls_back_to_v2(monkeypatch) -> None:
-    client = XiaomiCloudClient(session=None)  # type: ignore[arg-type]
+    client = XiaomiCloudClient(session=DummySession())  # type: ignore[arg-type]
     device = CloudDevice(
         device_id="1", name="vac", model="roborock.vacuum.s5", token="t", country="de", user_id="42"
     )
@@ -110,7 +129,7 @@ async def test_get_map_url_falls_back_to_v2(monkeypatch) -> None:
 
 
 async def test_get_map_url_without_result(monkeypatch) -> None:
-    client = XiaomiCloudClient(session=None)  # type: ignore[arg-type]
+    client = XiaomiCloudClient(session=DummySession())  # type: ignore[arg-type]
     device = CloudDevice(device_id="1", name="vac", model="roborock.vacuum.s5", token="t", country="de")
 
     async def fake_api(country, endpoint, params):
