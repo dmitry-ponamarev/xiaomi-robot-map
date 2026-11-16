@@ -99,14 +99,18 @@ async def test_captcha_flow(hass, monkeypatch) -> None:
     """Xiaomi asks for a captcha: the form shows the image and accepts the code."""
     from custom_components.xiaomi_robot_map.cloud import XiaomiCaptchaRequired
 
-    async def _login(self, captcha_code=None):
-        if captcha_code != "abcd":
-            raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.1")
+    async def _login(self):
+        raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.1")
+
+    async def _answer(self, code):
+        if code != "abcd":
+            raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.2")
 
     async def _captcha(self, url):
         return b"\x89PNG\r\n\x1a\n" + b"0" * 24
 
     monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_answer_captcha", _answer)
     monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_fetch_captcha", _captcha)
 
     result = await _start(hass, "cloud")
@@ -129,13 +133,17 @@ async def test_captcha_flow(hass, monkeypatch) -> None:
 async def test_captcha_rejected(hass, monkeypatch) -> None:
     from custom_components.xiaomi_robot_map.cloud import XiaomiCaptchaRequired
 
-    async def _login(self, captcha_code=None):
+    async def _login(self):
         raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.1")
+
+    async def _answer(self, code):
+        raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.2")
 
     async def _captcha(self, url):
         return b"\xff\xd8" + b"0" * 24
 
     monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_answer_captcha", _answer)
     monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_fetch_captcha", _captcha)
 
     result = await _start(hass, "cloud")
@@ -327,34 +335,6 @@ async def test_options_ignores_garbage_trim(hass, config_entry) -> None:
     result = await hass.config_entries.options.async_init(config_entry.entry_id)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"trim": "a,b,c,d"})
     assert result["data"]["trim"] == "0,0,0,0"
-
-
-async def test_captcha_is_repeated_in_a_notification(hass, monkeypatch) -> None:
-    """The form may not render images, so the captcha also goes to notifications."""
-    from homeassistant.components.persistent_notification import (
-        _async_get_or_create_notifications,
-    )
-
-    from custom_components.xiaomi_robot_map.cloud import XiaomiCaptchaRequired
-
-    async def _login(self, captcha_code=None):
-        raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.1")
-
-    async def _captcha(self, url):
-        return b"\xff\xd8" + b"0" * 24
-
-    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
-    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_fetch_captcha", _captcha)
-
-    result = await _start(hass, "cloud")
-    await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
-    await hass.async_block_till_done()
-
-    notifications = _async_get_or_create_notifications(hass)
-    assert "xiaomi_robot_map_captcha" in notifications
-    message = notifications["xiaomi_robot_map_captcha"]["message"]
-    assert "![" in message
-    assert "/api/xiaomi_robot_map/captcha/" in message
 
 
 async def test_captcha_view_serves_the_image(hass, hass_client, hass_access_token) -> None:

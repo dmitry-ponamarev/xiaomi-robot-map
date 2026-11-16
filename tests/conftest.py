@@ -39,6 +39,11 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     yield
 
 
+# kept before the autouse fixture patches the class, for tests of the real client
+REAL_LOGIN = XiaomiCloudClient.async_login
+REAL_ANSWER_CAPTCHA = XiaomiCloudClient.async_answer_captcha
+
+
 @pytest.fixture(autouse=True)
 def fake_cloud(monkeypatch):
     """Replace the network layer with deterministic data."""
@@ -54,7 +59,12 @@ def fake_cloud(monkeypatch):
     async def _fetch(self):
         return MapPayload(raw=build_map(), map_name="1695678900")
 
+    async def _answer(self, code):
+        self._service_token = "service-token"
+        self._user_id = "42"
+
     monkeypatch.setattr(XiaomiCloudClient, "async_login", _login)
+    monkeypatch.setattr(XiaomiCloudClient, "async_answer_captcha", _answer)
     monkeypatch.setattr(XiaomiCloudClient, "async_get_devices", _devices)
     monkeypatch.setattr(MapFetcher, "async_fetch", _fetch)
 

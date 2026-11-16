@@ -19,7 +19,7 @@
       },
       "captcha": {
         "title": "Xiaomi verification",
-        "description": "Xiaomi asks to confirm that a human is signing in.\n\n{image_markdown}\n\nType the characters from the picture. If the picture is not visible, open it here: {image_url}\n\n{detail}",
+        "description": "Xiaomi asks to confirm that a human is signing in.\n\n{image_markdown}\n\nType the characters from the picture below (the code is case-sensitive). If the picture is not shown, open it here: [captcha image]({image_url}) — the link works without signing in and lives for 30 minutes.\n\n{detail}",
         "data": {
           "captcha_code": "Code from the image"
         }

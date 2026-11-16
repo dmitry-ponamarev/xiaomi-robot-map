@@ -165,11 +165,25 @@ class XiaomiCloudClient:
 
     # -- login -----------------------------------------------------------
 
-    async def async_login(self, captcha_code: str | None = None) -> None:
-        """Log in and obtain a service token (optionally answering a captcha)."""
+    async def async_login(self) -> None:
+        """Log in and obtain a service token."""
         self.auth_url = None
         self._sign = await self._async_login_step_1()
-        await self._async_login_step_2(captcha_code)
+        await self._async_login_step_2()
+        await self._async_login_step_3()
+
+    async def async_answer_captcha(self, code: str) -> None:
+        """Answer the captcha of the challenge that was already issued.
+
+        Xiaomi ties the captcha to the ``_sign`` returned by ``serviceLogin``:
+        asking for a fresh sign generates a *different* challenge, so a code read
+        from the picture that was shown can never match. The retry therefore
+        reuses the stored sign and only adds ``captchaCode``.
+        """
+        if not self._sign:
+            raise XiaomiCloudError("there is no pending login challenge to answer")
+        self.auth_url = None
+        await self._async_login_step_2(code)
         await self._async_login_step_3()
 
     async def _async_login_step_1(self) -> str:
@@ -203,10 +217,14 @@ class XiaomiCloudClient:
             "_json": "true",
         }
         if captcha_code:
+            # Xiaomi validates the answer under `captCode`; `captchaCode` is the
+            # name the login page's own JS uses, so both are sent. Sending only
+            # `captchaCode` makes every answer come back as 87001 (wrong code).
+            params["captCode"] = captcha_code
             params["captchaCode"] = captcha_code
         try:
             async with self._session.post(
-                LOGIN_AUTH_URL, headers=headers, params=params, timeout=TIMEOUT
+                LOGIN_AUTH_URL, headers=headers, params=params, allow_redirects=False, timeout=TIMEOUT
             ) as response:
                 text = await response.text()
         except (aiohttp.ClientError, TimeoutError) as err:
@@ -215,6 +233,12 @@ class XiaomiCloudClient:
         payload = _to_json(text)
         if not isinstance(payload, dict):
             raise XiaomiAuthError("login step 2 failed: unexpected response")
+        _LOGGER.debug(
+            "login step 2: code=%s captcha=%s 2fa=%s",
+            payload.get("code"),
+            bool(payload.get("captchaUrl")),
+            bool(payload.get("notificationUrl")),
+        )
         if not payload.get("ssecurity"):
             code = payload.get("code")
             if payload.get("captchaUrl"):
@@ -260,6 +284,9 @@ class XiaomiCloudClient:
     async def async_fetch_captcha(self, url: str) -> bytes:
         """Download the captcha image Xiaomi asked for (same session/cookies)."""
         absolute = url if url.startswith("http") else f"https://account.xiaomi.com{url}"
+        # a fresh image for the current challenge, never a cached one
+        separator = "&" if "?" in absolute else "?"
+        absolute = f"{absolute}{separator}_t={int(time.time() * 1000)}"
         try:
             async with self._session.get(
                 absolute, headers={"User-Agent": self._agent}, timeout=TIMEOUT

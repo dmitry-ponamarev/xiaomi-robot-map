@@ -139,6 +139,89 @@ async def test_get_map_url_without_result(monkeypatch) -> None:
     assert await client.async_get_map_url(device, "1") is None
 
 
+async def test_captcha_answer_uses_capt_code_and_keeps_the_sign() -> None:
+    """The captcha must be answered on the challenge that produced the image."""
+    payload = (
+        "&&&START&&&"
+        '{"ssecurity":"ssecurity","userId":"42","cUserId":"c42","location":"https://loc"}'
+    )
+
+    class Response:
+        status = 200
+
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        async def text(self):
+            return self._text
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+    class Session:
+        cookie_jar = DummyJar()
+
+        def __init__(self) -> None:
+            self.calls = []
+
+        def post(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            return Response(payload)
+
+    session = Session()
+    client = XiaomiCloudClient(session=session)  # type: ignore[arg-type]
+    client._sign = "ORIGINAL-SIGN"
+
+    await client._async_login_step_2("ABCD")
+
+    _, kwargs = session.calls[-1]
+    assert kwargs["params"]["captCode"] == "ABCD"
+    assert kwargs["params"]["_sign"] == "ORIGINAL-SIGN"
+    assert client._sign == "ORIGINAL-SIGN"
+
+
+async def test_answer_captcha_never_requests_a_new_sign(monkeypatch) -> None:
+    """A new ``_sign`` means a new challenge, so the typed code could not match."""
+    from tests.conftest import REAL_ANSWER_CAPTCHA
+
+    client = XiaomiCloudClient(session=DummySession())  # type: ignore[arg-type]
+    monkeypatch.setattr(XiaomiCloudClient, "async_answer_captcha", REAL_ANSWER_CAPTCHA)
+    client._sign = "ORIGINAL-SIGN"
+    calls: list[object] = []
+
+    async def _step_1() -> str:
+        calls.append("step1")
+        return "NEW-SIGN"
+
+    async def _step_2(captcha_code=None) -> None:
+        calls.append(("step2", captcha_code))
+
+    async def _step_3() -> None:
+        calls.append("step3")
+
+    monkeypatch.setattr(client, "_async_login_step_1", _step_1)
+    monkeypatch.setattr(client, "_async_login_step_2", _step_2)
+    monkeypatch.setattr(client, "_async_login_step_3", _step_3)
+
+    await client.async_answer_captcha("ABCD")
+
+    assert calls == [("step2", "ABCD"), "step3"]
+    assert client._sign == "ORIGINAL-SIGN"
+
+
+async def test_answer_captcha_without_a_challenge_fails_cleanly(monkeypatch) -> None:
+    from custom_components.xiaomi_robot_map.cloud import XiaomiCloudError
+    from tests.conftest import REAL_ANSWER_CAPTCHA
+
+    monkeypatch.setattr(XiaomiCloudClient, "async_answer_captcha", REAL_ANSWER_CAPTCHA)
+    client = XiaomiCloudClient(session=DummySession())  # type: ignore[arg-type]
+    with pytest.raises(XiaomiCloudError):
+        await client.async_answer_captcha("ABCD")
+
+
 async def test_download_rejects_empty_payload(monkeypatch) -> None:
     from custom_components.xiaomi_robot_map.cloud import XiaomiApiError
 

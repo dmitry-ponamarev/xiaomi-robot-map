@@ -9,7 +9,6 @@ from typing import Any
 from urllib.parse import urlparse
 
 import voluptuous as vol
-from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
 from homeassistant.helpers import config_validation as cv
@@ -90,8 +89,6 @@ from .rr_map import RRMapError
 from .valetudo_map import ValetudoMapError
 
 _LOGGER = logging.getLogger(__name__)
-
-CAPTCHA_NOTIFICATION_ID = f"{DOMAIN}_captcha"
 
 
 def _auth_detail(err: XiaomiAuthError) -> str:
@@ -185,7 +182,13 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
         self._auth = auth
         client = self._pending_client
         try:
-            await client.async_login(captcha_code)
+            if captcha_code is None:
+                await client.async_login()
+            else:
+                # answer the challenge that issued the image the user is looking
+                # at: a new login would create a different captcha and the code
+                # could never match
+                await client.async_answer_captcha(captcha_code)
             devices = await client.async_get_devices([auth[CONF_COUNTRY]])
             self._client_device_id = client.device_id
         except XiaomiCaptchaRequired:
@@ -307,8 +310,6 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             detail = f"{detail}\n{image_error}".strip()
         if not image_url:
             detail = f"{detail}\nАккаунт Xiaomi требует капчу, но Home Assistant не смог её показать.".strip()
-        else:
-            self._async_notify_captcha(image_url)
         return self.async_show_form(
             step_id="captcha",
             data_schema=vol.Schema(
@@ -321,44 +322,6 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
                 "detail": detail,
             },
         )
-
-    @callback
-    def _async_notify_captcha(self, url: str) -> None:
-        """Repeat the captcha in a notification: forms may not render images."""
-        russian = (self.hass.config.language or "en").lower().startswith("ru")
-        if russian:
-            title = "Xiaomi требует подтверждение входа"
-            text = (
-                "Введите код с картинки в открытом окне настройки интеграции "
-                "«Карта робота-пылесоса Xiaomi».\n\n"
-                f"![капча]({url})\n\n"
-                f"Если картинка не видна, откройте её: [{url}]({url})"
-            )
-        else:
-            title = "Xiaomi asks for a sign-in confirmation"
-            text = (
-                "Enter the code from the picture in the open setup dialog of the "
-                "Xiaomi robot map integration.\n\n"
-                f"![captcha]({url})\n\n"
-                f"If the picture is not shown, open it: [{url}]({url})"
-            )
-        try:
-            persistent_notification.async_create(
-                self.hass,
-                text,
-                title=title,
-                notification_id=CAPTCHA_NOTIFICATION_ID,
-            )
-        except Exception:  # noqa: BLE001 - notifications are a fallback only
-            _LOGGER.debug("Unable to create the captcha notification", exc_info=True)
-
-    @callback
-    def _async_dismiss_captcha(self) -> None:
-        """Remove the captcha notification."""
-        try:
-            persistent_notification.async_dismiss(self.hass, CAPTCHA_NOTIFICATION_ID)
-        except Exception:  # noqa: BLE001 - nothing to dismiss
-            _LOGGER.debug("Unable to dismiss the captcha notification", exc_info=True)
 
     # -- two factor ------------------------------------------------------
 
@@ -512,7 +475,6 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(device.device_id)
                 self._abort_if_unique_id_configured(updates={CONF_HOST: user_input[CONF_HOST]})
                 drop_captcha(self.hass, self.flow_id)
-                self._async_dismiss_captcha()
                 return self.async_create_entry(
                     title=device.name,
                     data={
