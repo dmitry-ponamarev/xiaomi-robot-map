@@ -46,9 +46,11 @@ from .const import (
     CONF_IDLE_INTERVAL,
     CONF_LAYERS,
     CONF_LOCAL_KIND,
+    CONF_LOGIN_METHOD,
     CONF_MAP_NAME,
     CONF_MODEL,
     CONF_NAME,
+    CONF_PASS_TOKEN,
     CONF_PASSWORD,
     CONF_ROOM_NAMES,
     CONF_ROTATE,
@@ -72,6 +74,9 @@ from .const import (
     DOMAIN,
     LOCAL_KIND_RRMAP,
     LOCAL_KIND_VALETUDO,
+    LOGIN_METHOD_PASSWORD,
+    LOGIN_METHOD_TOKEN,
+    LOGIN_METHODS,
     MAX_IDLE_INTERVAL,
     MAX_SCAN_INTERVAL,
     MIN_IDLE_INTERVAL,
@@ -108,6 +113,17 @@ def _enlarge_captcha(data: bytes) -> bytes:
         _LOGGER.debug("Unable to enlarge the captcha: %s", err)
         return data
     return buffer.getvalue()
+
+
+def _split_pass_token(raw: str, username: str) -> tuple[str, str]:
+    """Accept ``userId:passToken`` as one value, or a bare passToken."""
+    raw = raw.strip()
+    if not raw:
+        return "", ""
+    user_id, separator, pass_token = raw.partition(":")
+    if separator and pass_token.strip():
+        return user_id.strip(), pass_token.strip()
+    return username.strip(), raw
 
 
 def _auth_detail(err: XiaomiAuthError) -> str:
@@ -177,11 +193,24 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
         defaults = defaults or {}
         return vol.Schema(
             {
-                vol.Required(CONF_USERNAME, default=defaults.get(CONF_USERNAME, "")): TextSelector(
+                vol.Required(
+                    CONF_LOGIN_METHOD,
+                    default=defaults.get(CONF_LOGIN_METHOD, LOGIN_METHOD_PASSWORD),
+                ): SelectSelector(
+                    SelectSelectorConfig(
+                        options=list(LOGIN_METHODS),
+                        mode=SelectSelectorMode.LIST,
+                        translation_key="login_method",
+                    )
+                ),
+                vol.Optional(CONF_USERNAME, default=defaults.get(CONF_USERNAME, "")): TextSelector(
                     TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="username")
                 ),
-                vol.Required(CONF_PASSWORD): TextSelector(
+                vol.Optional(CONF_PASSWORD, default=""): TextSelector(
                     TextSelectorConfig(type=TextSelectorType.PASSWORD, autocomplete="current-password")
+                ),
+                vol.Optional(CONF_PASS_TOKEN, default=""): TextSelector(
+                    TextSelectorConfig(type=TextSelectorType.PASSWORD)
                 ),
                 vol.Required(CONF_COUNTRY, default=defaults.get(CONF_COUNTRY, DEFAULT_COUNTRY)): SelectSelector(
                     SelectSelectorConfig(
@@ -201,7 +230,11 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
         self._auth = auth
         client = self._pending_client
         try:
-            if captcha_code is None:
+            if captcha_code is None and auth.get(CONF_PASS_TOKEN):
+                await client.async_login_with_token(
+                    auth.get(CONF_USER_ID, ""), auth[CONF_PASS_TOKEN]
+                )
+            elif captcha_code is None:
                 await client.async_login()
             else:
                 # answer the challenge that issued the image the user is looking
@@ -259,11 +292,38 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         detail = ""
         if user_input is not None:
-            auth = {
-                CONF_USERNAME: str(user_input[CONF_USERNAME]).strip(),
-                CONF_PASSWORD: str(user_input[CONF_PASSWORD]),
-                CONF_COUNTRY: str(user_input[CONF_COUNTRY]),
+            username = str(user_input.get(CONF_USERNAME) or "").strip()
+            password = str(user_input.get(CONF_PASSWORD) or "")
+            method = str(user_input.get(CONF_LOGIN_METHOD) or LOGIN_METHOD_PASSWORD)
+            auth: dict[str, str] = {
+                CONF_USERNAME: username,
+                CONF_PASSWORD: password,
+                CONF_COUNTRY: str(user_input.get(CONF_COUNTRY) or DEFAULT_COUNTRY),
+                CONF_LOGIN_METHOD: method,
             }
+            if method == LOGIN_METHOD_TOKEN:
+                user_id, pass_token = _split_pass_token(
+                    str(user_input.get(CONF_PASS_TOKEN) or ""), username
+                )
+                if user_id and pass_token:
+                    auth[CONF_USER_ID] = user_id
+                    auth[CONF_PASS_TOKEN] = pass_token
+                else:
+                    errors["base"] = "invalid_format"
+                    detail = (
+                        "Нужна пара `userId:passToken` из cookies account.xiaomi.com "
+                        "(DevTools → Application → Cookies)."
+                    )
+            elif not username or not password:
+                errors["base"] = "invalid_auth"
+                detail = "Укажите логин и пароль либо выберите вход по токену."
+            if errors:
+                return self.async_show_form(
+                    step_id="cloud",
+                    data_schema=self._auth_schema(user_input),
+                    errors=errors,
+                    description_placeholders={"detail": detail},
+                )
             try:
                 await self._async_login_and_get_devices(auth)
             except XiaomiCaptchaRequired as err:

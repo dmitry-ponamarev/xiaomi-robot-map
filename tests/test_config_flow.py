@@ -95,6 +95,52 @@ async def test_cloud_unreachable(hass, monkeypatch) -> None:
     assert result["errors"] == {"base": "cannot_connect"}
 
 
+async def test_token_login_skips_the_password(hass, monkeypatch) -> None:
+    """A userId:passToken pair logs in without a password and without a captcha."""
+    seen: dict[str, str] = {}
+
+    async def _token(self, user_id, pass_token):
+        seen["user_id"] = user_id
+        seen["pass_token"] = pass_token
+        self._service_token = "service-token"
+        self._user_id = user_id
+
+    monkeypatch.setattr(
+        "custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login_with_token", _token
+    )
+
+    result = await _start(hass, "cloud")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            **USER_INPUT,
+            "login_method": "token",
+            "password": "",
+            "pass_token": " 1234567890:AbCdEf ",
+        },
+    )
+    assert result["step_id"] == "device"
+    assert seen == {"user_id": "1234567890", "pass_token": "AbCdEf"}
+
+
+async def test_token_login_requires_a_token(hass) -> None:
+    result = await _start(hass, "cloud")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**USER_INPUT, "login_method": "token", "pass_token": ""}
+    )
+    assert result["step_id"] == "cloud"
+    assert result["errors"] == {"base": "invalid_format"}
+
+
+async def test_password_login_requires_credentials(hass) -> None:
+    result = await _start(hass, "cloud")
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {**USER_INPUT, "password": ""}
+    )
+    assert result["step_id"] == "cloud"
+    assert result["errors"] == {"base": "invalid_auth"}
+
+
 async def test_captcha_flow(hass, monkeypatch) -> None:
     """Xiaomi asks for a captcha: the form shows the image and accepts the code."""
     from custom_components.xiaomi_robot_map.cloud import XiaomiCaptchaRequired

@@ -18,7 +18,7 @@ BASE = pathlib.Path(__file__).resolve().parents[1] / "custom_components" / "xiao
 # step id -> field keys rendered by the matching schema
 CONFIG_STEPS: dict[str, list[str]] = {
     "user": ["source"],
-    "cloud": ["username", "password", "country"],
+    "cloud": ["login_method", "username", "password", "pass_token", "country"],
     "captcha": ["captcha_code"],
     "two_factor": [],
     "local": ["url"],

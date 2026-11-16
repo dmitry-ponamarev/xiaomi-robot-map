@@ -39,6 +39,12 @@ CONF_LOCAL_KIND = "local_kind"
 CONF_URL = "url"
 CONF_BEARER_TOKEN = "bearer_token"
 CONF_CAPTCHA_CODE = "captcha_code"
+CONF_LOGIN_METHOD = "login_method"
+CONF_PASS_TOKEN = "pass_token"
+
+LOGIN_METHOD_PASSWORD = "password"
+LOGIN_METHOD_TOKEN = "token"
+LOGIN_METHODS = [LOGIN_METHOD_PASSWORD, LOGIN_METHOD_TOKEN]
 CONF_CLIENT_DEVICE_ID = "client_device_id"
 
 LOCAL_KIND_VALETUDO = "valetudo"

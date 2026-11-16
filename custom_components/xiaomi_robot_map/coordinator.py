@@ -18,12 +18,15 @@ from .cloud import XiaomiAuthError, XiaomiCloudClient, XiaomiCloudError
 from .const import (
     CONF_IDLE_INTERVAL,
     CONF_LAYERS,
+    CONF_PASS_TOKEN,
     CONF_ROTATE,
     CONF_SCALE,
     CONF_SCAN_INTERVAL,
     CONF_STORE_RAW_MAP,
     CONF_THEME,
     CONF_TRIM,
+    CONF_USER_ID,
+    CONF_USERNAME,
     DEFAULT_IDLE_INTERVAL,
     DEFAULT_LAYERS,
     DEFAULT_ROTATE,
@@ -149,7 +152,16 @@ class MapCoordinator(DataUpdateCoordinator[MapSnapshot]):
 
         if self.client is not None and not self.client.logged_in:
             try:
-                await self.client.async_login()
+                pass_token = self.entry.data.get(CONF_PASS_TOKEN)
+                if pass_token:
+                    await self.client.async_login_with_token(
+                        self.entry.data.get(CONF_USER_ID)
+                        or self.entry.data.get(CONF_USERNAME)
+                        or "",
+                        pass_token,
+                    )
+                else:
+                    await self.client.async_login()
             except XiaomiAuthError as err:
                 raise ConfigEntryAuthFailed(str(err)) from err
             except XiaomiCloudError as err:

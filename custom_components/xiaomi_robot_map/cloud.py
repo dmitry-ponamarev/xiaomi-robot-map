@@ -32,6 +32,7 @@ _LOGGER = logging.getLogger(__name__)
 
 LOGIN_URL = "https://account.xiaomi.com/pass/serviceLogin"
 LOGIN_AUTH_URL = "https://account.xiaomi.com/pass/serviceLoginAuth2"
+SDK_VERSION = "4.2.29"
 TIMEOUT = aiohttp.ClientTimeout(total=30)
 DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=60, sock_read=30)
 
@@ -185,10 +186,63 @@ class XiaomiCloudClient:
         """
         if not self._captcha_ick:
             raise XiaomiCloudError("there is no pending captcha to answer")
-        self._use_captcha_cookie()
         self.auth_url = None
+        ick = self._captcha_ick
+        # step 1 refreshes _sign, and it may also rotate the jar's `ick`, so the
+        # challenge cookie is restored *after* it and sent explicitly as well
         self._sign = await self._async_login_step_1()
-        await self._async_login_step_2(code)
+        self._use_captcha_cookie()
+        await self._async_login_step_2(code, ick=ick)
+        await self._async_login_step_3()
+
+    async def async_login_with_token(self, user_id: str, pass_token: str) -> None:
+        """Log in with the ``userId``/``passToken`` pair of a browser session.
+
+        This skips the password step (and with it the captcha) entirely: Xiaomi
+        hands out a ``serviceToken`` for a valid session cookie pair.
+        """
+        user_id = user_id.strip()
+        pass_token = pass_token.strip()
+        if not user_id or not pass_token:
+            raise XiaomiAuthError(
+                "both userId and passToken are required",
+                description="both userId and passToken are required",
+            )
+        headers = {"User-Agent": self._agent}
+        cookies = {"userId": user_id, "passToken": pass_token}
+        try:
+            async with self._session.get(
+                f"{LOGIN_URL}?sid=xiaomiio&_json=true",
+                headers=headers,
+                cookies=cookies,
+                timeout=TIMEOUT,
+            ) as response:
+                text = await response.text()
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise XiaomiCloudError(f"unable to reach account.xiaomi.com: {err}") from err
+
+        payload = _to_json(text)
+        if not isinstance(payload, dict) or not payload.get("location"):
+            code = payload.get("code") if isinstance(payload, dict) else None
+            description = str(
+                (payload.get("desc") or payload.get("description"))
+                if isinstance(payload, dict)
+                else "token rejected by Xiaomi"
+            )
+            _LOGGER.warning(
+                "Xiaomi rejected the passToken: code=%s, description=%s", code, description
+            )
+            raise XiaomiAuthError(
+                description,
+                code=code if isinstance(code, int) else None,
+                description=description,
+            )
+
+        self._ssecurity = str(payload.get("ssecurity") or "")
+        self._user_id = str(payload.get("userId") or user_id)
+        self._c_user_id = str(payload.get("cUserId") or "")
+        self._pass_token = payload.get("passToken") or pass_token
+        self._location = str(payload["location"])
         await self._async_login_step_3()
 
     def _use_captcha_cookie(self) -> None:
@@ -225,12 +279,19 @@ class XiaomiCloudClient:
                 _LOGGER.debug("Unable to read the captcha cookie: %s", err)
         self._captcha_ick = value
 
+    def _auth_cookies(self, ick: str | None = None) -> dict[str, str]:
+        """Cookies Xiaomi expects on every login request."""
+        cookies = {"sdkVersion": SDK_VERSION, "deviceId": self._device_id}
+        if ick:
+            cookies["ick"] = ick
+        return cookies
+
     async def _async_login_step_1(self) -> str:
         url = f"{LOGIN_URL}?sid=xiaomiio&_json=true"
         headers = {"User-Agent": self._agent}
         try:
             async with self._session.get(
-                url, headers=headers, cookies={"userId": self._username or ""}, timeout=TIMEOUT
+                url, headers=headers, cookies=self._auth_cookies(), timeout=TIMEOUT
             ) as response:
                 text = await response.text()
         except (aiohttp.ClientError, TimeoutError) as err:
@@ -241,7 +302,7 @@ class XiaomiCloudClient:
             raise XiaomiAuthError("login step 1 failed: no _sign in the response")
         return sign
 
-    async def _async_login_step_2(self, captcha_code: str | None = None) -> None:
+    async def _async_login_step_2(self, captcha_code: str | None = None, ick: str | None = None) -> None:
         headers = {
             "User-Agent": self._agent,
             "Content-Type": "application/x-www-form-urlencoded",
@@ -256,14 +317,21 @@ class XiaomiCloudClient:
             "_json": "true",
         }
         if captcha_code:
-            # Xiaomi validates the answer under `captCode`; `captchaCode` is the
-            # name the login page's own JS uses, so both are sent. Sending only
-            # `captchaCode` makes every answer come back as 87001 (wrong code).
+            # Xiaomi validates the answer under `captCode` in the form body;
+            # sending it as `captchaCode` (the name the login page's JS uses)
+            # makes every answer come back as 87001 "wrong code"
             params["captCode"] = captcha_code
-            params["captchaCode"] = captcha_code
         try:
+            # the answer must be posted as a form body together with the `ick`
+            # cookie of the captcha that produced the picture, otherwise Xiaomi
+            # validates it against a different captcha instance
             async with self._session.post(
-                LOGIN_AUTH_URL, headers=headers, params=params, allow_redirects=False, timeout=TIMEOUT
+                LOGIN_AUTH_URL,
+                headers=headers,
+                cookies=self._auth_cookies(ick),
+                data=params,
+                allow_redirects=False,
+                timeout=TIMEOUT,
             ) as response:
                 text = await response.text()
         except (aiohttp.ClientError, TimeoutError) as err:
@@ -315,7 +383,10 @@ class XiaomiCloudClient:
         except (aiohttp.ClientError, TimeoutError) as err:
             raise XiaomiCloudError(f"unable to obtain a service token: {err}") from err
         if not token:
-            raise XiaomiAuthError("login step 3 failed: no serviceToken cookie")
+            raise XiaomiAuthError(
+                "Xiaomi did not return a serviceToken: the password or the passToken was rejected",
+                description="no serviceToken",
+            )
         self._service_token = token.value
 
     # -- API -------------------------------------------------------------

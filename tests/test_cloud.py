@@ -175,11 +175,12 @@ async def test_captcha_answer_uses_capt_code_and_keeps_the_sign() -> None:
     client = XiaomiCloudClient(session=session)  # type: ignore[arg-type]
     client._sign = "ORIGINAL-SIGN"
 
-    await client._async_login_step_2("ABCD")
+    await client._async_login_step_2("ABCD", ick="CHALLENGE-ICK")
 
     _, kwargs = session.calls[-1]
-    assert kwargs["params"]["captCode"] == "ABCD"
-    assert kwargs["params"]["_sign"] == "ORIGINAL-SIGN"
+    assert kwargs["data"]["captCode"] == "ABCD"
+    assert kwargs["data"]["_sign"] == "ORIGINAL-SIGN"
+    assert kwargs["cookies"]["ick"] == "CHALLENGE-ICK"
     assert client._sign == "ORIGINAL-SIGN"
 
 
@@ -200,8 +201,8 @@ async def test_answer_captcha_restores_the_captcha_cookie(monkeypatch) -> None:
         calls.append("step1")
         return "NEW-SIGN"
 
-    async def _step_2(captcha_code=None) -> None:
-        calls.append(("step2", captcha_code))
+    async def _step_2(captcha_code=None, ick=None) -> None:
+        calls.append(("step2", captcha_code, ick))
 
     async def _step_3() -> None:
         calls.append("step3")
@@ -213,7 +214,8 @@ async def test_answer_captcha_restores_the_captcha_cookie(monkeypatch) -> None:
     await client.async_answer_captcha("ABCD")
 
     assert restored == [{"ick": "CHALLENGE-ICK"}]
-    assert calls == ["step1", ("step2", "ABCD"), "step3"]
+    # the challenge cookie is restored after step 1 and passed to the answer too
+    assert calls == ["step1", ("step2", "ABCD", "CHALLENGE-ICK"), "step3"]
 
 
 async def test_answer_captcha_without_a_challenge_fails_cleanly(monkeypatch) -> None:

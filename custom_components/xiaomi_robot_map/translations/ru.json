@@ -11,10 +11,12 @@
       },
       "cloud": {
         "title": "Аккаунт Xiaomi",
-        "description": "Войдите в аккаунт Mi Home, к которому привязан пылесос. Пароль используется только для загрузки карты из облака Xiaomi.\n\n{detail}",
+        "description": "Войдите в аккаунт Mi Home, к которому привязан робот.\n\n**Если Xiaomi циклически просит капчу** — выберите способ входа «Токен из браузера (без капчи)» и вставьте пару `userId:passToken` из cookies `account.xiaomi.com` (браузер → DevTools → Application → Cookies). Пароль тогда не нужен.\n\n{detail}",
         "data": {
-          "username": "Аккаунт Mi Home (e-mail / телефон)",
+          "login_method": "Способ входа",
+          "username": "Логин Mi Home (телефон или e-mail)",
           "password": "Пароль",
+          "pass_token": "Токен userId:passToken",
           "country": "Регион облака"
         }
       },
@@ -133,6 +135,14 @@
     "refresh": {
       "name": "Обновить карту",
       "description": "Немедленно загружает карту, игнорируя паузу для простоя."
+    }
+  },
+  "selector": {
+    "login_method": {
+      "options": {
+        "password": "Логин и пароль",
+        "token": "Токен из браузера (без капчи)"
+      }
     }
   }
 }

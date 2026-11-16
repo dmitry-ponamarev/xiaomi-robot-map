@@ -10,10 +10,12 @@
       },
       "cloud": {
         "title": "Xiaomi account",
-        "description": "Sign in with the Mi Home account that owns the vacuum. The credentials are only used to download the map from the Xiaomi cloud.\n\n{detail}",
+        "description": "Sign in with the Mi Home account that owns the robot.\n\n**If Xiaomi keeps asking for a captcha**, pick the browser-token method and paste the `userId:passToken` pair from the `account.xiaomi.com` cookies (browser → DevTools → Application → Cookies). No password is needed then.\n\n{detail}",
         "data": {
-          "username": "Mi Home account (e-mail / phone)",
+          "login_method": "Sign-in method",
+          "username": "Mi Home login (phone or e-mail)",
           "password": "Password",
+          "pass_token": "userId:passToken token",
           "country": "Cloud region"
         }
       },
@@ -132,6 +134,14 @@
     "refresh": {
       "name": "Refresh map",
       "description": "Downloads the map immediately, ignoring the idle back-off."
+    }
+  },
+  "selector": {
+    "login_method": {
+      "options": {
+        "password": "Login and password",
+        "token": "Browser token (no captcha)"
+      }
     }
   }
 }
