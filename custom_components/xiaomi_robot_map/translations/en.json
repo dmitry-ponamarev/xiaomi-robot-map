@@ -17,6 +17,17 @@
           "country": "Cloud region"
         }
       },
+      "captcha": {
+        "title": "Xiaomi verification",
+        "description": "Xiaomi asks to confirm that a human is signing in. Open the link below in the browser where Home Assistant is open, read the characters and type them here. A new image is generated for every attempt.\n\n{image_url}\n\n{detail}",
+        "data": {
+          "captcha_code": "Code from the image"
+        }
+      },
+      "two_factor": {
+        "title": "Confirm the sign-in",
+        "description": "Xiaomi asks for an additional confirmation. Open this link on a device that is signed in to the Mi Home account, **from the same public IP as Home Assistant**, confirm the login, then press Submit:\n\n{url}\n\n{detail}"
+      },
       "local": {
         "title": "Local map source",
         "description": "No Xiaomi account is used. Valetudo robots answer at http://<robot-ip>/api/v2/robot/state/map. Alternatively point to any HTTP endpoint that returns a raw RRMap .gz/.bin file. Fill in the login only if the endpoint requires it.",
@@ -66,7 +77,8 @@
       "invalid_host": "Enter the local IP address of the vacuum.",
       "invalid_url": "Enter a full URL starting with http:// or https://.",
       "invalid_format": "The endpoint answered, but the payload is neither a Valetudo map nor a valid RRMap file.",
-      "captcha_required": "Xiaomi asks for a captcha for this account or IP address. Log in once to Mi Home (web or app) from the same network as Home Assistant, then retry here. If the account was created in the Roborock app, it cannot be used with the Xiaomi cloud."
+      "captcha_required": "Xiaomi asks for a captcha for this account or IP address. Log in once to Mi Home (web or app) from the same network as Home Assistant, then retry here. If the account was created in the Roborock app, it cannot be used with the Xiaomi cloud.",
+      "invalid_captcha": "That code did not match. The image below has been refreshed - try again."
     },
     "abort": {
       "already_configured": "This vacuum is already configured.",

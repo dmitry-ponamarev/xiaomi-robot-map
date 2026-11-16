@@ -95,18 +95,56 @@ async def test_cloud_unreachable(hass, monkeypatch) -> None:
     assert result["errors"] == {"base": "cannot_connect"}
 
 
-async def test_captcha_required(hass, monkeypatch) -> None:
+async def test_captcha_flow(hass, monkeypatch) -> None:
+    """Xiaomi asks for a captcha: the form shows the image and accepts the code."""
     from custom_components.xiaomi_robot_map.cloud import XiaomiCaptchaRequired
 
-    async def _login(self, *args, **kwargs):
-        raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.1")
+    async def _login(self, captcha_code=None):
+        if captcha_code != "abcd":
+            raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.1")
+
+    async def _captcha(self, url):
+        return b"\x89PNG\r\n\x1a\n" + b"0" * 24
 
     monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_fetch_captcha", _captcha)
+
     result = await _start(hass, "cloud")
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     assert result["type"] == "form"
-    assert result["errors"] == {"base": "captcha_required"}
-    assert "captcha" in result["description_placeholders"]["detail"].lower()
+    assert result["step_id"] == "captcha"
+    image_url = result["description_placeholders"]["image_url"]
+    assert "/api/xiaomi_robot_map/captcha/" in image_url
+    from custom_components.xiaomi_robot_map.http_views import _storage
+
+    stored = _storage(hass)
+    assert list(stored.values())[-1][1] == "image/png"
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"captcha_code": "abcd"})
+    assert result["step_id"] == "device"
+
+
+async def test_captcha_rejected(hass, monkeypatch) -> None:
+    from custom_components.xiaomi_robot_map.cloud import XiaomiCaptchaRequired
+
+    async def _login(self, captcha_code=None):
+        raise XiaomiCaptchaRequired("/pass/getCode?icodeType=login&0.1")
+
+    async def _captcha(self, url):
+        return b"\xff\xd8" + b"0" * 24
+
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_login", _login)
+    monkeypatch.setattr("custom_components.xiaomi_robot_map.cloud.XiaomiCloudClient.async_fetch_captcha", _captcha)
+
+    result = await _start(hass, "cloud")
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"captcha_code": "zzzz"})
+    assert result["type"] == "form"
+    assert result["step_id"] == "captcha"
+    assert result["errors"] == {"base": "invalid_captcha"}
+    from custom_components.xiaomi_robot_map.http_views import _storage
+
+    assert list(_storage(hass).values())[-1][1] == "image/jpeg"
 
 
 async def test_invalid_auth_shows_xiaomi_code(hass, monkeypatch) -> None:
@@ -286,6 +324,45 @@ async def test_options_ignores_garbage_trim(hass, config_entry) -> None:
     result = await hass.config_entries.options.async_init(config_entry.entry_id)
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"trim": "a,b,c,d"})
     assert result["data"]["trim"] == "0,0,0,0"
+
+
+async def test_captcha_view_serves_the_image(hass, hass_client, hass_access_token) -> None:
+    from homeassistant.setup import async_setup_component
+
+    from custom_components.xiaomi_robot_map.http_views import (
+        async_register_captcha_view,
+        store_captcha,
+    )
+
+    assert await async_setup_component(hass, "http", {})
+    async_register_captcha_view(hass)
+    store_captcha(hass, "flow-1", b"\x89PNG\r\n\x1a\n" + b"0" * 16)
+
+    client = await hass_client()
+    headers = {"Authorization": f"Bearer {hass_access_token}"}
+    response = await client.get("/api/xiaomi_robot_map/captcha/flow-1", headers=headers)
+    assert response.status == 200
+    assert response.content_type == "image/png"
+    assert (await response.read()).startswith(b"\x89PNG")
+
+    missing = await client.get("/api/xiaomi_robot_map/captcha/nope", headers=headers)
+    assert missing.status == 404
+
+
+async def test_captcha_view_needs_auth(hass, hass_client_no_auth) -> None:
+    from homeassistant.setup import async_setup_component
+
+    from custom_components.xiaomi_robot_map.http_views import (
+        async_register_captcha_view,
+        store_captcha,
+    )
+
+    assert await async_setup_component(hass, "http", {})
+    async_register_captcha_view(hass)
+    store_captcha(hass, "flow-2", b"jpegdata")
+    client = await hass_client_no_auth()
+    response = await client.get("/api/xiaomi_robot_map/captcha/flow-2")
+    assert response.status in (401, 403)
 
 
 async def test_reauth_flow(hass, config_entry, monkeypatch) -> None:

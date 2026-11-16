@@ -36,6 +36,8 @@ from .cloud import (
 from .const import (
     AVAILABLE_COUNTRIES,
     CONF_BEARER_TOKEN,
+    CONF_CAPTCHA_CODE,
+    CONF_CLIENT_DEVICE_ID,
     CONF_COUNTRY,
     CONF_DEVICE_ID,
     CONF_HOST,
@@ -75,6 +77,12 @@ from .const import (
     SOURCE_CLOUD,
     SOURCE_LOCAL,
     THEMES,
+)
+from .http_views import (
+    async_register_captcha_view,
+    captcha_url,
+    drop_captcha,
+    store_captcha,
 )
 from .provider import LocalMapFetcher, MapFetchError, parse_local_payload
 from .rr_map import RRMapError
@@ -127,6 +135,12 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
         self._auth: dict[str, str] = {}
         self._devices: list[CloudDevice] = []
         self._reauth_entry: ConfigEntry | None = None
+        # Kept between the captcha form and its answer: the captcha is bound to
+        # the cookies of the session that requested it.
+        self._pending_client: XiaomiCloudClient | None = None
+        self._client_device_id: str | None = None
+        self._two_factor_url: str | None = None
+        self._captcha_url: str | None = None
 
     # -- helpers ---------------------------------------------------------
 
@@ -159,15 +173,30 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
 
-    async def _async_login_and_get_devices(self, auth: dict[str, str]) -> None:
-        client = self._client(auth)
-        try:
-            await client.async_login()
-            devices = await client.async_get_devices([auth[CONF_COUNTRY]])
-        finally:
-            await client.async_close()
+    async def _async_login_and_get_devices(
+        self, auth: dict[str, str], captcha_code: str | None = None
+    ) -> None:
+        """Log in and load the device list, keeping the client alive on a captcha."""
+        if self._pending_client is None:
+            self._pending_client = self._client(auth)
         self._auth = auth
+        client = self._pending_client
+        try:
+            await client.async_login(captcha_code)
+            devices = await client.async_get_devices([auth[CONF_COUNTRY]])
+            self._client_device_id = client.device_id
+        except XiaomiCaptchaRequired:
+            raise
+        except BaseException:
+            await self._release_client()
+            raise
+        await self._release_client()
         self._devices = [device for device in devices if device.is_supported]
+
+    async def _release_client(self) -> None:
+        if self._pending_client is not None:
+            await self._pending_client.async_close()
+            self._pending_client = None
 
     # -- source selection ------------------------------------------------
 
@@ -213,13 +242,13 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             try:
                 await self._async_login_and_get_devices(auth)
             except XiaomiCaptchaRequired as err:
-                _LOGGER.debug("Xiaomi requires a captcha: %s", err)
-                errors["base"] = "captcha_required"
-                detail = _auth_detail(err)
+                _LOGGER.debug("Xiaomi requires a captcha for this login")
+                self._captcha_url = err.url
+                return await self.async_step_captcha()
             except XiaomiTwoFactorRequired as err:
                 _LOGGER.debug("Xiaomi requires 2FA: %s", err)
-                errors["base"] = "two_factor"
-                detail = f"{err.url}"
+                self._two_factor_url = err.url
+                return await self.async_step_two_factor()
             except XiaomiAuthError as err:
                 _LOGGER.debug("Xiaomi login failed: %s", err)
                 errors["base"] = "invalid_auth"
@@ -237,6 +266,95 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={"detail": detail},
         )
+
+    # -- captcha ---------------------------------------------------------
+
+    async def async_step_captcha(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Show the captcha image and submit the typed code."""
+        errors: dict[str, str] = {}
+        detail = ""
+        if self._pending_client is None:
+            return await self.async_step_cloud()
+
+        if user_input is not None:
+            code = str(user_input.get(CONF_CAPTCHA_CODE) or "").strip()
+            if not code:
+                errors[CONF_CAPTCHA_CODE] = "invalid_captcha"
+            else:
+                try:
+                    await self._async_login_and_get_devices(self._auth, captcha_code=code)
+                except XiaomiCaptchaRequired as err:
+                    _LOGGER.debug("The captcha answer was rejected")
+                    self._captcha_url = err.url
+                    errors["base"] = "invalid_captcha"
+                except XiaomiTwoFactorRequired as err:
+                    errors["base"] = "two_factor"
+                    detail = err.url
+                except XiaomiAuthError as err:
+                    errors["base"] = "invalid_auth"
+                    detail = _auth_detail(err)
+                except XiaomiCloudError as err:
+                    errors["base"] = "cannot_connect"
+                    detail = str(err)
+                else:
+                    return await self.async_step_device()
+
+        image_url = await self._async_store_captcha()
+        return self.async_show_form(
+            step_id="captcha",
+            data_schema=vol.Schema(
+                {vol.Required(CONF_CAPTCHA_CODE): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))}
+            ),
+            errors=errors,
+            description_placeholders={"image_url": image_url, "detail": detail},
+        )
+
+    # -- two factor ------------------------------------------------------
+
+    async def async_step_two_factor(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Ask the user to confirm the login in a browser, then retry."""
+        errors: dict[str, str] = {}
+        detail = ""
+        if user_input is not None:
+            try:
+                await self._async_login_and_get_devices(self._auth)
+            except XiaomiCaptchaRequired as err:
+                self._captcha_url = err.url
+                return await self.async_step_captcha()
+            except XiaomiTwoFactorRequired as err:
+                self._two_factor_url = err.url
+                errors["base"] = "two_factor"
+            except XiaomiAuthError as err:
+                errors["base"] = "invalid_auth"
+                detail = _auth_detail(err)
+            except XiaomiCloudError as err:
+                errors["base"] = "cannot_connect"
+                detail = str(err)
+            else:
+                return await self.async_step_device()
+
+        return self.async_show_form(
+            step_id="two_factor",
+            data_schema=vol.Schema({}),
+            errors=errors,
+            description_placeholders={"url": self._two_factor_url or "", "detail": detail},
+        )
+
+    async def _async_store_captcha(self) -> str:
+        """Keep the captcha image for this flow and return the URL to show it."""
+        client = self._pending_client
+        url = self._captcha_url or (client.auth_url if client is not None else None)
+        if client is None or not url:
+            return ""
+        try:
+            data = await client.async_fetch_captcha(url)
+        except XiaomiCloudError as err:
+            _LOGGER.warning("Unable to download the Xiaomi captcha: %s", err)
+            return ""
+
+        async_register_captcha_view(self.hass)
+        store_captcha(self.hass, self.flow_id, data)
+        return captcha_url(self.hass, self.flow_id)
 
     # -- local source ----------------------------------------------------
 
@@ -341,6 +459,7 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 await self.async_set_unique_id(device.device_id)
                 self._abort_if_unique_id_configured(updates={CONF_HOST: user_input[CONF_HOST]})
+                drop_captcha(self.hass, self.flow_id)
                 return self.async_create_entry(
                     title=device.name,
                     data={
@@ -352,6 +471,7 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
                         CONF_HOST: str(user_input[CONF_HOST]).strip(),
                         CONF_USER_ID: device.user_id or "",
                         CONF_SOURCE: SOURCE_CLOUD,
+                        CONF_CLIENT_DEVICE_ID: self._client_device_id or "",
                     },
                 )
 
@@ -385,6 +505,8 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 try:
                     device = await self._async_resolve_device(token)
+                except XiaomiCaptchaRequired:
+                    errors["base"] = "captcha_required"
                 except XiaomiCloudError:
                     errors["base"] = "cannot_connect"
                 else:

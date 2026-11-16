@@ -116,6 +116,7 @@ class XiaomiCloudClient:
         session: aiohttp.ClientSession | None,
         username: str | None = None,
         password: str | None = None,
+        device_id: str | None = None,
     ) -> None:
         # A private cookie jar keeps this account's login cookies away from the
         # shared Home Assistant session (and from stale cookies of old attempts).
@@ -124,7 +125,7 @@ class XiaomiCloudClient:
         self._username = username
         self._password = password
         self._agent = _generate_agent()
-        self._device_id = _generate_device_id()
+        self._device_id = device_id or _generate_device_id()
         self._sign: str | None = None
         self._ssecurity: str | None = None
         self._user_id: str | None = None
@@ -157,13 +158,18 @@ class XiaomiCloudClient:
     def user_id(self) -> str | None:
         return self._user_id
 
+    @property
+    def device_id(self) -> str:
+        """Stable client identifier, reused across logins to look less suspicious."""
+        return self._device_id
+
     # -- login -----------------------------------------------------------
 
-    async def async_login(self) -> None:
-        """Log in and obtain a service token."""
+    async def async_login(self, captcha_code: str | None = None) -> None:
+        """Log in and obtain a service token (optionally answering a captcha)."""
         self.auth_url = None
         self._sign = await self._async_login_step_1()
-        await self._async_login_step_2()
+        await self._async_login_step_2(captcha_code)
         await self._async_login_step_3()
 
     async def _async_login_step_1(self) -> str:
@@ -182,7 +188,7 @@ class XiaomiCloudClient:
             raise XiaomiAuthError("login step 1 failed: no _sign in the response")
         return sign
 
-    async def _async_login_step_2(self) -> None:
+    async def _async_login_step_2(self, captcha_code: str | None = None) -> None:
         headers = {
             "User-Agent": self._agent,
             "Content-Type": "application/x-www-form-urlencoded",
@@ -196,6 +202,8 @@ class XiaomiCloudClient:
             "_sign": self._sign or "",
             "_json": "true",
         }
+        if captcha_code:
+            params["captchaCode"] = captcha_code
         try:
             async with self._session.post(
                 LOGIN_AUTH_URL, headers=headers, params=params, timeout=TIMEOUT
@@ -248,6 +256,22 @@ class XiaomiCloudClient:
         self._service_token = token.value
 
     # -- API -------------------------------------------------------------
+
+    async def async_fetch_captcha(self, url: str) -> bytes:
+        """Download the captcha image Xiaomi asked for (same session/cookies)."""
+        absolute = url if url.startswith("http") else f"https://account.xiaomi.com{url}"
+        try:
+            async with self._session.get(
+                absolute, headers={"User-Agent": self._agent}, timeout=TIMEOUT
+            ) as response:
+                if response.status != 200:
+                    raise XiaomiCloudError(f"captcha download failed with HTTP {response.status}")
+                data = await response.read()
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise XiaomiCloudError(f"unable to download the captcha: {err}") from err
+        if not data:
+            raise XiaomiCloudError("the captcha image is empty")
+        return data
 
     async def async_get_devices(self, countries: list[str] | None = None) -> list[CloudDevice]:
         """Return all devices of the account, optionally limited to country hosts."""

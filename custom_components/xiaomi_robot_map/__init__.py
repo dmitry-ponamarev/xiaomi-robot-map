@@ -15,6 +15,7 @@ from .cloud import XiaomiCloudClient
 from .const import (
     ATTR_CONFIG_ENTRY_ID,
     CONF_BEARER_TOKEN,
+    CONF_CLIENT_DEVICE_ID,
     CONF_COUNTRY,
     CONF_DEVICE_ID,
     CONF_HOST,
@@ -34,6 +35,7 @@ from .const import (
     SOURCE_LOCAL,
 )
 from .coordinator import MapCoordinator
+from .http_views import async_register_captcha_view
 from .provider import LocalMapFetcher, MapFetcher
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +55,7 @@ type XiaomiRobotMapConfigEntry = ConfigEntry[XiaomiRobotMapRuntimeData]
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up the integration (config entries only)."""
+    async_register_captcha_view(hass)
     return True
 
 
@@ -73,6 +76,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: XiaomiRobotMapConfigEntr
             None,
             username=entry.data.get(CONF_USERNAME),
             password=entry.data.get(CONF_PASSWORD),
+            device_id=entry.data.get(CONF_CLIENT_DEVICE_ID) or None,
         )
         fetcher = MapFetcher(
             hass,
