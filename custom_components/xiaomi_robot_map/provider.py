@@ -51,6 +51,12 @@ class MapPayload:
     kind: str = LOCAL_KIND_RRMAP
 
 
+def _is_unknown_object(err: Exception) -> bool:
+    """True when the cloud does not know the requested map object (yet)."""
+    text = str(err).lower()
+    return "objectname" in text or "object name" in text or "invalid obj" in text
+
+
 def query_map_name(host: str, token: str, retries: int = MAP_NAME_RETRIES) -> str:
     """Ask the vacuum for its current map name (blocking, run in executor)."""
     last_error: Exception | None = None
@@ -107,7 +113,17 @@ class MapFetcher:
             country=self._country,
             user_id=self._user_id,
         )
-        url = await self._client.async_get_map_url(device, map_name)
+        try:
+            url = await self._client.async_get_map_url(device, map_name)
+        except XiaomiApiError as err:
+            if self._map_name_override or not _is_unknown_object(err):
+                raise
+            # The robot reports a new map name after every new map, so a cached
+            # name may already be stale: ask the robot again and retry once.
+            _LOGGER.debug("The cloud rejected map '%s' (%s); asking the robot again", map_name, err)
+            self.invalidate_cache()
+            map_name = await self.async_get_map_name()
+            url = await self._client.async_get_map_url(device, map_name)
         if not url:
             raise MapFetchError(f"the cloud did not provide a download URL for map '{map_name}'")
         raw = await self._client.async_download(url)

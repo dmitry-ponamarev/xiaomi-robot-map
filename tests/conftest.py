@@ -42,6 +42,7 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 # kept before the autouse fixture patches the class, for tests of the real client
 REAL_LOGIN = XiaomiCloudClient.async_login
 REAL_ANSWER_CAPTCHA = XiaomiCloudClient.async_answer_captcha
+REAL_ASYNC_FETCH = MapFetcher.async_fetch
 
 
 @pytest.fixture(autouse=True)

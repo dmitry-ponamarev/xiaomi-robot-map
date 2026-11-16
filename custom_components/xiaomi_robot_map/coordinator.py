@@ -207,6 +207,18 @@ class MapCoordinator(DataUpdateCoordinator[MapSnapshot]):
             png=rendered.png,
         )
 
+    def placeholder_snapshot(self, text: str = "NO MAP YET") -> MapSnapshot:
+        """Stand-in snapshot for a map that has not been fetched yet."""
+        rendered = render_placeholder(text, self.render_options)
+        return MapSnapshot(
+            map_data=RRMap(),
+            rendered=rendered,
+            map_name=None,
+            fetched_at=dt_util.utcnow(),
+            raw_size=0,
+            png=rendered.png,
+        )
+
     async def _async_store_raw(self, raw: bytes) -> None:
         """Keep the last raw blob on disk for troubleshooting."""
         directory = self.hass.config.path(STORAGE_RAW_DIR)

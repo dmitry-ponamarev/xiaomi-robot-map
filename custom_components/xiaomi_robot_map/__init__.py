@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers.typing import ConfigType
 
 from .cloud import XiaomiCloudClient
@@ -90,7 +90,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: XiaomiRobotMapConfigEntr
         )
     coordinator = MapCoordinator(hass, entry, client, fetcher)
 
-    await coordinator.async_config_entry_first_refresh()
+    try:
+        await coordinator.async_config_entry_first_refresh()
+    except ConfigEntryNotReady as err:
+        # No map in the cloud yet (e.g. the robot has not uploaded one) is a
+        # normal state, not a reason to refuse the whole setup: create the
+        # entities with a placeholder and let the coordinator keep polling.
+        _LOGGER.warning(
+            "The first map fetch did not succeed (%s); creating the entities with a placeholder",
+            err,
+        )
+        coordinator.async_set_updated_data(coordinator.placeholder_snapshot())
 
     entry.runtime_data = XiaomiRobotMapRuntimeData(client=client, fetcher=fetcher, coordinator=coordinator)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

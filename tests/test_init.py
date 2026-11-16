@@ -12,7 +12,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.xiaomi_robot_map.cloud import XiaomiApiError, XiaomiAuthError
 from custom_components.xiaomi_robot_map.const import DOMAIN, SERVICE_GET_MAP, SERVICE_REFRESH
-from custom_components.xiaomi_robot_map.provider import MapFetcher
+from custom_components.xiaomi_robot_map.provider import MapFetcher, MapFetchError
 
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -39,6 +39,26 @@ async def test_setup_creates_camera_and_sensors(hass, loaded_entry) -> None:
     camera = next(entity for entity in entities if entity.domain == "camera")
     assert camera.entity_id == "camera.robot_vacuum_map"
     assert loaded_entry.state is ConfigEntryState.LOADED
+
+
+async def test_setup_survives_a_missing_map(hass, config_entry, monkeypatch) -> None:
+    """No map in the cloud yet must not block the whole entry."""
+
+    async def _missing(self):
+        raise MapFetchError("objectname invalid")
+
+    monkeypatch.setattr(MapFetcher, "async_fetch", _missing)
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert config_entry.state is ConfigEntryState.LOADED
+    state = hass.states.get("camera.robot_vacuum_map")
+    assert state is not None
+    assert state.state != "unavailable"
+
+    image = await async_get_image(hass, "camera.robot_vacuum_map")
+    assert image.content.startswith(PNG_MAGIC)
 
 
 async def test_camera_returns_png(hass, loaded_entry) -> None:
@@ -115,15 +135,22 @@ async def test_diagnostics(hass, loaded_entry) -> None:
     assert diagnostics["map"]["map_name"] == "1695678900"
 
 
-async def test_fetch_failure_marks_entry_not_ready(hass, config_entry, monkeypatch) -> None:
+async def test_fetch_failure_loads_with_a_placeholder(hass, config_entry, monkeypatch) -> None:
+    """A cloud hiccup must not leave the entry unusable."""
+
     async def _fail(self):
         raise XiaomiApiError("cloud is down")
 
     monkeypatch.setattr(MapFetcher, "async_fetch", _fail)
     config_entry.add_to_hass(hass)
-    assert not await hass.config_entries.async_setup(config_entry.entry_id)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
-    assert config_entry.state is ConfigEntryState.SETUP_RETRY
+
+    assert config_entry.state is ConfigEntryState.LOADED
+    state = hass.states.get("camera.robot_vacuum_map")
+    assert state is not None
+    assert state.state == "idle"
+    assert state.attributes["error"] == "cloud is down"
 
 
 async def test_auth_failure_starts_reauth(hass, config_entry, monkeypatch) -> None:
@@ -205,9 +232,13 @@ async def test_local_entry_setup(hass, local_entry, aioclient_mock) -> None:
     assert set(state.attributes["rooms"]) == {"1", "2"}
 
 
-async def test_local_entry_failure_retries(hass, local_entry, aioclient_mock) -> None:
+async def test_local_entry_failure_loads_with_a_placeholder(hass, local_entry, aioclient_mock) -> None:
     aioclient_mock.get(LOCAL_URL, status=500)
     local_entry.add_to_hass(hass)
-    assert not await hass.config_entries.async_setup(local_entry.entry_id)
+    assert await hass.config_entries.async_setup(local_entry.entry_id)
     await hass.async_block_till_done()
-    assert local_entry.state is ConfigEntryState.SETUP_RETRY
+
+    assert local_entry.state is ConfigEntryState.LOADED
+    state = hass.states.get("camera.valetudo_robot_map")
+    assert state is not None
+    assert state.state != "unavailable"
