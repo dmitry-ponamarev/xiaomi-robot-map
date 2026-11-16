@@ -133,6 +133,7 @@ def build_map(
     vacuum_angle: int = 45,
     charger: tuple[int, int] = (2000, 1500),
     compress: bool = True,
+    header_length: int = 28,
 ) -> bytes:
     """Build a full map blob (gzip compressed by default)."""
     pixels = bytes(make_pixels())
@@ -158,7 +159,7 @@ def build_map(
         _block(BLOCK_DIGEST, b""),
     ]
 
-    header = bytearray(28)
+    header = bytearray(header_length)
     header[0:2] = b"rr"
     struct.pack_into("<H", header, 0x02, len(header))
     struct.pack_into("<H", header, 0x04, 1)

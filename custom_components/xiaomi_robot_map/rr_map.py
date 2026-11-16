@@ -501,11 +501,13 @@ def vacuum_room_at(image: MapImage, position: Point | None) -> int | None:
 def parse_rrmap(raw: bytes) -> RRMap:
     """Parse a (optionally compressed) RRMap blob into :class:`RRMap`."""
     data = decompress(raw)
-    if len(data) < 24:
+    if len(data) < 20:
         raise RRMapFormatError(f"map data is too short ({len(data)} bytes)")
 
+    # firmware versions ship headers of 20, 24 or 28 bytes; the reference parser
+    # simply trusts the length stored in the blob, so do the same
     header_length = _u16(data, 0x02)
-    if header_length < 24 or header_length > len(data):
+    if header_length < 12 or header_length > len(data):
         raise RRMapFormatError(f"unexpected map header length: {header_length}")
 
     result = RRMap(

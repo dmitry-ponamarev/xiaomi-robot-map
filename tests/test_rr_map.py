@@ -110,6 +110,17 @@ def test_plain_and_zlib_payloads() -> None:
     assert parse_rrmap(raw).image is not None
 
 
+@pytest.mark.parametrize("header_length", [20, 24, 28])
+def test_parse_accepts_short_headers(header_length: int) -> None:
+    """Firmware ships 20-, 24- and 28-byte map headers (an S6 sends 20)."""
+    map_data = parse_rrmap(build_map(compress=False, header_length=header_length))
+    assert map_data.header_length == header_length
+    assert map_data.image is not None
+    assert (map_data.image.width, map_data.image.height) == (WIDTH, HEIGHT)
+    assert map_data.vacuum_position is not None
+    assert (map_data.vacuum_position.x, map_data.vacuum_position.y) == (2600, 1500)
+
+
 def test_decompress_variants() -> None:
     raw = build_map(compress=False)
     assert decompress(gzip.compress(raw)) == raw
