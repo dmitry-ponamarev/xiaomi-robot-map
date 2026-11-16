@@ -299,14 +299,22 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
                 else:
                     return await self.async_step_device()
 
-        image_url = await self._async_store_captcha()
+        image_markdown, image_url, image_error = await self._async_store_captcha()
+        if image_error:
+            detail = f"{detail}\n{image_error}".strip()
+        if not image_url:
+            detail = f"{detail}\nАккаунт Xiaomi требует капчу, но Home Assistant не смог её показать.".strip()
         return self.async_show_form(
             step_id="captcha",
             data_schema=vol.Schema(
                 {vol.Required(CONF_CAPTCHA_CODE): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT))}
             ),
             errors=errors,
-            description_placeholders={"image_url": image_url, "detail": detail},
+            description_placeholders={
+                "image_markdown": image_markdown,
+                "image_url": image_url,
+                "detail": detail,
+            },
         )
 
     # -- two factor ------------------------------------------------------
@@ -340,21 +348,22 @@ class XiaomiRobotMapConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={"url": self._two_factor_url or "", "detail": detail},
         )
 
-    async def _async_store_captcha(self) -> str:
-        """Keep the captcha image for this flow and return the URL to show it."""
+    async def _async_store_captcha(self) -> tuple[str, str, str]:
+        """Prepare the captcha image: inline markdown, view link, error text."""
         client = self._pending_client
         url = self._captcha_url or (client.auth_url if client is not None else None)
         if client is None or not url:
-            return ""
+            return "", "", "Не удалось определить адрес капчи — попробуйте войти заново."
         try:
             data = await client.async_fetch_captcha(url)
         except XiaomiCloudError as err:
             _LOGGER.warning("Unable to download the Xiaomi captcha: %s", err)
-            return ""
+            return "", "", f"Не удалось загрузить картинку капчи: {err}"
 
         async_register_captcha_view(self.hass)
         store_captcha(self.hass, self.flow_id, data)
-        return captcha_url(self.hass, self.flow_id)
+        url = captcha_url(self.hass, self.flow_id)
+        return f"![captcha]({url})", url, ""
 
     # -- local source ----------------------------------------------------
 

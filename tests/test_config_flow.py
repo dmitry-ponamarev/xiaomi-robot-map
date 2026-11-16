@@ -113,8 +113,10 @@ async def test_captcha_flow(hass, monkeypatch) -> None:
     result = await hass.config_entries.flow.async_configure(result["flow_id"], USER_INPUT)
     assert result["type"] == "form"
     assert result["step_id"] == "captcha"
-    image_url = result["description_placeholders"]["image_url"]
+    placeholders = result["description_placeholders"]
+    image_url = placeholders["image_url"]
     assert "/api/xiaomi_robot_map/captcha/" in image_url
+    assert placeholders["image_markdown"] == f"![captcha]({image_url})"
     from custom_components.xiaomi_robot_map.http_views import _storage
 
     stored = _storage(hass)
@@ -142,6 +144,7 @@ async def test_captcha_rejected(hass, monkeypatch) -> None:
     assert result["type"] == "form"
     assert result["step_id"] == "captcha"
     assert result["errors"] == {"base": "invalid_captcha"}
+    assert result["description_placeholders"]["image_markdown"].startswith("![captcha](")
     from custom_components.xiaomi_robot_map.http_views import _storage
 
     assert list(_storage(hass).values())[-1][1] == "image/jpeg"
@@ -347,6 +350,18 @@ async def test_captcha_view_serves_the_image(hass, hass_client, hass_access_toke
 
     missing = await client.get("/api/xiaomi_robot_map/captcha/nope", headers=headers)
     assert missing.status == 404
+
+    from custom_components.xiaomi_robot_map.http_views import captcha_url
+
+    signed = captcha_url(hass, "flow-1")
+    assert "/api/xiaomi_robot_map/captcha/flow-1" in signed
+    assert "authSig=" in signed
+    # the signed URL must work without an Authorization header (used in <img>)
+    from urllib.parse import urlparse
+
+    parsed = urlparse(signed)
+    response = await client.get(f"{parsed.path}?{parsed.query}")
+    assert response.status == 200
 
 
 async def test_captcha_view_needs_auth(hass, hass_client_no_auth) -> None:

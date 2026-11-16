@@ -10,9 +10,11 @@ characters into the form.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 from aiohttp import web
 from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http.auth import async_sign_path
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.network import get_url
 
@@ -46,13 +48,21 @@ def drop_captcha(hass: HomeAssistant, flow_id: str) -> None:
     _storage(hass).pop(flow_id, None)
 
 
+CAPTCHA_URL_TTL = timedelta(minutes=30)
+
+
 def captcha_url(hass: HomeAssistant, flow_id: str) -> str:
-    """Absolute URL of the captcha image, or an empty string if HA has no URL."""
+    """URL of the captcha image, signed so it can be used in an <img> tag."""
+    path = f"{VIEW_PATH}/{flow_id}"
+    try:
+        path = async_sign_path(hass, path, CAPTCHA_URL_TTL)
+    except Exception:  # noqa: BLE001 - signing needs hass.http, keep the plain path
+        _LOGGER.debug("Unable to sign the captcha URL, using a plain path", exc_info=True)
     try:
         base = get_url(hass, prefer_external=False) or ""
     except Exception:  # noqa: BLE001 - NoURLAvailableError
         base = ""
-    return f"{base}{VIEW_PATH}/{flow_id}" if base else f"{VIEW_PATH}/{flow_id}"
+    return f"{base}{path}" if base else path
 
 
 class CaptchaView(HomeAssistantView):
